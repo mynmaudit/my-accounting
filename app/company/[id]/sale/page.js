@@ -61,6 +61,8 @@ function SOTab({ companyId, onCreateInvoice }) {
   const [orders, setOrders] = useState([])
   const [contacts, setContacts] = useState([])
   const [showForm, setShowForm] = useState(false)
+  const [editingOrder, setEditingOrder] = useState(null)
+  const [filter, setFilter] = useState('active')
   const [selectedContact, setSelectedContact] = useState(null)
   const [form, setForm] = useState({ contact_id: '', date: new Date().toISOString().split('T')[0], note: '' })
   const [items, setItems] = useState([{ description: '', qty: 1, price: 0 }])
@@ -100,26 +102,55 @@ function SOTab({ companyId, onCreateInvoice }) {
     setForm({...form, contact_id: contactId})
   }
 
+  const openEdit = (order) => {
+    setEditingOrder(order)
+    setForm({ contact_id: order.contact_id, date: order.date, note: order.note || '' })
+    setSelectedContact(contacts.find(c => c.id === order.contact_id))
+    setItems(order.items ? JSON.parse(order.items) : [{ description: '', qty: 1, price: 0 }])
+    setShowForm(true)
+  }
+
+  const cancelEdit = () => {
+    setEditingOrder(null)
+    setShowForm(false)
+    setForm({ contact_id: '', date: new Date().toISOString().split('T')[0], note: '' })
+    setItems([{ description: '', qty: 1, price: 0 }])
+    setSelectedContact(null)
+  }
+
   const saveOrder = async () => {
     if (!form.contact_id) return alert('กรุณาเลือกลูกค้า')
     if (total <= 0) return alert('กรุณากรอกรายการสินค้าและราคา')
     setSaving(true)
-    const docNumber = await genDocNumber('so')
-    const { error } = await supabase.from('transactions').insert([{
-      company_id: companyId, type: 'so', date: form.date,
-      description: selectedContact?.name, doc_number: docNumber,
-      contact_id: form.contact_id, amount: total,
-      category: selectedContact?.name, note: form.note,
-      status: 'open', items: JSON.stringify(items),
-    }])
-    if (!error) {
-      await loadOrders()
-      setShowForm(false)
-      setForm({ contact_id: '', date: new Date().toISOString().split('T')[0], note: '' })
-      setItems([{ description: '', qty: 1, price: 0 }])
-      setSelectedContact(null)
-    } else alert('เกิดข้อผิดพลาด: ' + error.message)
+
+    if (editingOrder) {
+      const { error } = await supabase.from('transactions').update({
+        date: form.date, description: selectedContact?.name,
+        contact_id: form.contact_id, amount: total,
+        category: selectedContact?.name, note: form.note,
+        items: JSON.stringify(items),
+      }).eq('id', editingOrder.id)
+      if (!error) { await loadOrders(); cancelEdit() }
+      else alert('เกิดข้อผิดพลาด: ' + error.message)
+    } else {
+      const docNumber = await genDocNumber('so')
+      const { error } = await supabase.from('transactions').insert([{
+        company_id: companyId, type: 'so', date: form.date,
+        description: selectedContact?.name, doc_number: docNumber,
+        contact_id: form.contact_id, amount: total,
+        category: selectedContact?.name, note: form.note,
+        status: 'open', items: JSON.stringify(items),
+      }])
+      if (!error) { await loadOrders(); cancelEdit() }
+      else alert('เกิดข้อผิดพลาด: ' + error.message)
+    }
     setSaving(false)
+  }
+
+  const cancelOrder = async (order) => {
+    if (!confirm(`ยืนยันยกเลิก ${order.doc_number}?`)) return
+    await supabase.from('transactions').update({ status: 'cancelled' }).eq('id', order.id)
+    await loadOrders()
   }
 
   const createInvoice = async (order) => {
@@ -140,16 +171,38 @@ function SOTab({ companyId, onCreateInvoice }) {
     } else alert('เกิดข้อผิดพลาด: ' + error.message)
   }
 
+  const filtered = orders.filter(o => {
+    if (filter === 'active') return o.status === 'open'
+    if (filter === 'invoiced') return o.status === 'invoiced'
+    if (filter === 'cancelled') return o.status === 'cancelled'
+    return true
+  })
+
+  const statusLabel = (s) => {
+    if (s === 'open') return <span className="text-xs text-green-500 font-medium">● เปิดอยู่</span>
+    if (s === 'invoiced') return <span className="text-xs text-gray-400 font-medium">✓ ออกใบแจ้งหนี้แล้ว</span>
+    if (s === 'cancelled') return <span className="text-xs text-red-400 font-medium">✕ ยกเลิกแล้ว</span>
+  }
+
   return (
     <div>
       <div className="flex justify-between items-center mb-6">
-        <h2 className="font-bold text-gray-900">Sales Order</h2>
-        <button onClick={() => setShowForm(!showForm)} className="bg-indigo-600 text-white rounded-lg px-4 py-2 text-sm font-semibold hover:bg-indigo-700">+ สร้าง SO ใหม่</button>
+        <div className="flex gap-2">
+          {[['active','เปิดอยู่'],['invoiced','ออกใบแจ้งหนี้แล้ว'],['cancelled','ยกเลิก'],['all','ทั้งหมด']].map(([k,v]) => (
+            <button key={k} onClick={() => setFilter(k)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${filter===k ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-500 border-gray-200 hover:border-indigo-300'}`}>
+              {v}
+            </button>
+          ))}
+        </div>
+        <button onClick={() => { setEditingOrder(null); setShowForm(!showForm) }} className="bg-indigo-600 text-white rounded-lg px-4 py-2 text-sm font-semibold hover:bg-indigo-700">
+          + สร้าง SO ใหม่
+        </button>
       </div>
 
       {showForm && (
         <div className="bg-gray-50 rounded-xl p-6 mb-6 border border-gray-200">
-          <h3 className="font-bold text-gray-900 mb-4">สร้าง Sales Order</h3>
+          <h3 className="font-bold text-gray-900 mb-4">{editingOrder ? `แก้ไข ${editingOrder.doc_number}` : 'สร้าง Sales Order'}</h3>
           <div className="grid grid-cols-2 gap-4 mb-4">
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-1">ลูกค้า *</label>
@@ -158,7 +211,6 @@ function SOTab({ companyId, onCreateInvoice }) {
                 <option value="">-- เลือกลูกค้า --</option>
                 {contacts.map(c => <option key={c.id} value={c.id}>{c.code} — {c.name}</option>)}
               </select>
-              {contacts.length === 0 && <p className="text-xs text-red-500 mt-1">ยังไม่มีลูกค้า <a href={`/company/${companyId}/contacts`} className="underline">เพิ่มที่นี่</a></p>}
             </div>
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-1">วันที่ *</label>
@@ -172,7 +224,6 @@ function SOTab({ companyId, onCreateInvoice }) {
               <div className="font-semibold text-indigo-900">{selectedContact.name}</div>
               {selectedContact.tax_id && <div className="text-indigo-600">Tax ID: {selectedContact.tax_id}</div>}
               {selectedContact.address && <div className="text-indigo-600">{selectedContact.address}</div>}
-              <div className="text-indigo-500 text-xs mt-1">Credit: ฿{selectedContact.credit_limit?.toLocaleString()} / {selectedContact.credit_days} วัน</div>
             </div>
           )}
 
@@ -184,7 +235,7 @@ function SOTab({ companyId, onCreateInvoice }) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-gray-500 border-b border-gray-200">
-                  <th className="pb-2 font-semibold w-1/2">รายละเอียดสินค้า/บริการ</th>
+                  <th className="pb-2 font-semibold w-1/2">รายละเอียด</th>
                   <th className="pb-2 font-semibold text-center w-1/6">จำนวน (ชิ้น)</th>
                   <th className="pb-2 font-semibold text-right w-1/4">ราคา/หน่วย (บาท)</th>
                   <th className="pb-2 w-8"></th>
@@ -212,40 +263,38 @@ function SOTab({ companyId, onCreateInvoice }) {
           <div className="flex justify-between items-center">
             <div className="text-xl font-bold text-gray-900">รวม: ฿{total.toLocaleString('th-TH', {minimumFractionDigits: 2})}</div>
             <div className="flex gap-3">
-              <button onClick={() => setShowForm(false)} className="text-gray-500 text-sm hover:text-gray-700">ยกเลิก</button>
+              <button onClick={cancelEdit} className="text-gray-500 text-sm hover:text-gray-700">ยกเลิก</button>
               <button onClick={saveOrder} disabled={saving} className="bg-indigo-600 text-white rounded-lg px-6 py-2 text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">
-                {saving ? 'กำลังบันทึก...' : 'บันทึก SO'}
+                {saving ? 'กำลังบันทึก...' : editingOrder ? 'บันทึกการแก้ไข' : 'บันทึก SO'}
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {orders.length === 0 ? (
-        <div className="text-center py-12 text-gray-400"><div className="text-4xl mb-2">🛒</div><div>ยังไม่มี Sales Order</div></div>
+      {filtered.length === 0 ? (
+        <div className="text-center py-12 text-gray-400"><div className="text-4xl mb-2">🛒</div><div>ไม่มีรายการ</div></div>
       ) : (
         <div className="space-y-3">
-          {orders.map((o) => (
-            <div key={o.id} className="flex items-center justify-between p-4 rounded-xl border border-gray-100 hover:border-indigo-100 hover:bg-indigo-50 transition-all">
+          {filtered.map((o) => (
+            <div key={o.id} className={`flex items-center justify-between p-4 rounded-xl border transition-all ${o.status === 'cancelled' ? 'bg-gray-50 border-gray-100 opacity-60' : 'border-gray-100 hover:border-indigo-100 hover:bg-indigo-50'}`}>
               <div>
                 <div className="flex items-center gap-2">
-                  <span className="font-bold text-indigo-600 text-sm">{o.doc_number}</span>
+                  <span className={`font-bold text-sm ${o.status === 'cancelled' ? 'text-gray-400 line-through' : 'text-indigo-600'}`}>{o.doc_number}</span>
                   <span className="font-semibold text-gray-900">{o.description}</span>
                 </div>
                 <div className="text-sm text-gray-400">{o.date}</div>
                 {o.note && <div className="text-xs text-gray-400 mt-1">หมายเหตุ: {o.note}</div>}
+                <div className="mt-1">{statusLabel(o.status)}</div>
               </div>
-              <div className="text-right flex items-center gap-4">
-                <div>
-                  <div className="font-bold text-gray-900">฿{o.amount?.toLocaleString('th-TH', {minimumFractionDigits: 2})}</div>
-                  <div className={`text-xs font-medium ${o.status === 'invoiced' ? 'text-gray-400' : 'text-green-500'}`}>
-                    {o.status === 'invoiced' ? '✓ ออกใบแจ้งหนี้แล้ว' : '● เปิดอยู่'}
+              <div className="text-right flex items-center gap-3">
+                <div className="font-bold text-gray-900">฿{o.amount?.toLocaleString('th-TH', {minimumFractionDigits: 2})}</div>
+                {o.status === 'open' && (
+                  <div className="flex flex-col gap-1">
+                    <button onClick={() => createInvoice(o)} className="bg-green-500 text-white rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-green-600 whitespace-nowrap">ออกใบแจ้งหนี้</button>
+                    <button onClick={() => openEdit(o)} className="bg-indigo-100 text-indigo-700 rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-indigo-200 whitespace-nowrap">✏️ แก้ไข</button>
+                    <button onClick={() => cancelOrder(o)} className="bg-red-100 text-red-600 rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-red-200 whitespace-nowrap">✕ ยกเลิก</button>
                   </div>
-                </div>
-                {o.status !== 'invoiced' && (
-                  <button onClick={() => createInvoice(o)} className="bg-green-500 text-white rounded-lg px-3 py-2 text-xs font-semibold hover:bg-green-600 whitespace-nowrap">
-                    ออกใบแจ้งหนี้
-                  </button>
                 )}
               </div>
             </div>
@@ -258,6 +307,7 @@ function SOTab({ companyId, onCreateInvoice }) {
 
 function InvoiceTab({ companyId, company, onReceived }) {
   const [invoices, setInvoices] = useState([])
+  const [filter, setFilter] = useState('active')
   const [loading, setLoading] = useState(true)
 
   useEffect(() => { loadInvoices() }, [companyId])
@@ -276,6 +326,15 @@ function InvoiceTab({ companyId, company, onReceived }) {
       return `REC-${year}-${String(lastNum + 1).padStart(4, '0')}`
     }
     return `REC-${year}-0001`
+  }
+
+  const cancelInvoice = async (inv) => {
+    if (!confirm(`ยืนยันยกเลิก ${inv.doc_number}?\nSO ที่อ้างอิงจะกลับเป็น "เปิดอยู่" เพื่อออกใบใหม่ได้`)) return
+    await supabase.from('transactions').update({ status: 'cancelled' }).eq('id', inv.id)
+    if (inv.ref_doc) {
+      await supabase.from('transactions').update({ status: 'open' }).eq('company_id', companyId).eq('doc_number', inv.ref_doc)
+    }
+    await loadInvoices()
   }
 
   const receivePayment = async (inv) => {
@@ -299,49 +358,65 @@ function InvoiceTab({ companyId, company, onReceived }) {
 
   const openPrint = (inv) => window.open(`/invoice-print?id=${inv.id}`, '_blank')
 
+  const filtered = invoices.filter(o => {
+    if (filter === 'active') return o.status === 'open'
+    if (filter === 'paid') return o.status === 'paid'
+    if (filter === 'cancelled') return o.status === 'cancelled'
+    return true
+  })
+
+  const statusLabel = (s) => {
+    if (s === 'open') return <span className="text-xs text-orange-500 font-medium">● รอรับเงิน</span>
+    if (s === 'paid') return <span className="text-xs text-green-500 font-medium">✓ รับเงินแล้ว</span>
+    if (s === 'cancelled') return <span className="text-xs text-red-400 font-medium">✕ ยกเลิกแล้ว</span>
+  }
+
   if (loading) return <div className="text-center py-12 text-gray-400">กำลังโหลด...</div>
 
   return (
     <div>
       <div className="flex justify-between items-center mb-6">
-        <h2 className="font-bold text-gray-900">ใบแจ้งหนี้ / ใบกำกับภาษี</h2>
+        <div className="flex gap-2">
+          {[['active','รอรับเงิน'],['paid','รับเงินแล้ว'],['cancelled','ยกเลิก'],['all','ทั้งหมด']].map(([k,v]) => (
+            <button key={k} onClick={() => setFilter(k)}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${filter===k ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-500 border-gray-200 hover:border-indigo-300'}`}>
+              {v}
+            </button>
+          ))}
+        </div>
         <div className="text-sm text-gray-400">ออกจาก SO ได้เลย</div>
       </div>
-      {invoices.length === 0 ? (
+
+      {filtered.length === 0 ? (
         <div className="text-center py-12 text-gray-400">
           <div className="text-4xl mb-2">🧾</div>
-          <div>ยังไม่มีใบแจ้งหนี้</div>
-          <div className="text-sm mt-1">ไปที่ Sales Order แล้วกด "ออกใบแจ้งหนี้"</div>
+          <div>ไม่มีรายการ</div>
         </div>
       ) : (
         <div className="space-y-3">
-          {invoices.map((inv) => (
-            <div key={inv.id} className="p-4 rounded-xl border border-gray-100 hover:border-green-100 transition-all">
+          {filtered.map((inv) => (
+            <div key={inv.id} className={`p-4 rounded-xl border transition-all ${inv.status === 'cancelled' ? 'bg-gray-50 border-gray-100 opacity-60' : 'border-gray-100 hover:border-green-100'}`}>
               <div className="flex items-center justify-between">
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="font-bold text-green-600 text-sm">{inv.doc_number}</span>
+                    <span className={`font-bold text-sm ${inv.status === 'cancelled' ? 'text-gray-400 line-through' : 'text-green-600'}`}>{inv.doc_number}</span>
                     <span className="font-semibold text-gray-900">{inv.contacts?.name || inv.description}</span>
+                    {inv.status === 'cancelled' && <span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded font-bold">VOID</span>}
                   </div>
                   {inv.contacts?.tax_id && <div className="text-xs text-gray-400">Tax ID: {inv.contacts.tax_id}</div>}
                   <div className="text-sm text-gray-400">{inv.date}</div>
                   {inv.ref_doc && <div className="text-xs text-gray-400">อ้างอิง: {inv.ref_doc}</div>}
+                  <div className="mt-1">{statusLabel(inv.status)}</div>
                 </div>
                 <div className="text-right flex items-center gap-3">
-                  <div>
-                    <div className="font-bold text-gray-900 text-lg">฿{inv.amount?.toLocaleString('th-TH', {minimumFractionDigits: 2})}</div>
-                    <div className={`text-xs font-medium ${inv.status === 'paid' ? 'text-gray-400' : 'text-orange-500'}`}>
-                      {inv.status === 'paid' ? '✓ รับเงินแล้ว' : '● รอรับเงิน'}
-                    </div>
-                  </div>
-                  <div className="flex flex-col gap-2">
-                    <button onClick={() => openPrint(inv)} className="bg-indigo-600 text-white rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-indigo-700 whitespace-nowrap">
-                      📄 พิมพ์
-                    </button>
-                    {inv.status !== 'paid' && (
-                      <button onClick={() => receivePayment(inv)} className="bg-green-500 text-white rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-green-600 whitespace-nowrap">
-                        💰 รับเงิน
-                      </button>
+                  <div className="font-bold text-gray-900 text-lg">฿{inv.amount?.toLocaleString('th-TH', {minimumFractionDigits: 2})}</div>
+                  <div className="flex flex-col gap-1">
+                    <button onClick={() => openPrint(inv)} className="bg-indigo-600 text-white rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-indigo-700 whitespace-nowrap">📄 พิมพ์</button>
+                    {inv.status === 'open' && (
+                      <>
+                        <button onClick={() => receivePayment(inv)} className="bg-green-500 text-white rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-green-600 whitespace-nowrap">💰 รับเงิน</button>
+                        <button onClick={() => cancelInvoice(inv)} className="bg-red-100 text-red-600 rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-red-200 whitespace-nowrap">✕ ยกเลิก</button>
+                      </>
                     )}
                   </div>
                 </div>
@@ -391,15 +466,11 @@ function ReceiptTab({ companyId, company }) {
                   </div>
                   <div className="text-sm text-gray-400">{rec.date}</div>
                   {rec.ref_doc && <div className="text-xs text-gray-400">อ้างอิง: {rec.ref_doc}</div>}
+                  <span className="text-xs text-green-500 font-medium">✓ รับเงินแล้ว</span>
                 </div>
                 <div className="text-right flex items-center gap-3">
-                  <div>
-                    <div className="font-bold text-gray-900 text-lg">฿{rec.amount?.toLocaleString('th-TH', {minimumFractionDigits: 2})}</div>
-                    <div className="text-xs text-green-500 font-medium">✓ รับเงินแล้ว</div>
-                  </div>
-                  <button onClick={() => openPrint(rec)} className="bg-indigo-600 text-white rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-indigo-700 whitespace-nowrap">
-                    📄 พิมพ์
-                  </button>
+                  <div className="font-bold text-gray-900 text-lg">฿{rec.amount?.toLocaleString('th-TH', {minimumFractionDigits: 2})}</div>
+                  <button onClick={() => openPrint(rec)} className="bg-indigo-600 text-white rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-indigo-700 whitespace-nowrap">📄 พิมพ์</button>
                 </div>
               </div>
             </div>
