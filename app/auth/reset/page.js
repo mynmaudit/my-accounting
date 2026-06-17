@@ -1,13 +1,29 @@
 'use client'
-import { useState } from 'react'
+import { useState, useEffect, Suspense } from 'react'
 import { supabase } from '../../../lib/supabase'
+import { useSearchParams } from 'next/navigation'
 
-export default function ResetPassword() {
+function ResetForm() {
+  const searchParams = useSearchParams()
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [loading, setLoading] = useState(false)
+  const [verifying, setVerifying] = useState(true)
   const [done, setDone] = useState(false)
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    const verify = async () => {
+      const token_hash = searchParams.get('token_hash')
+      const type = searchParams.get('type')
+      if (token_hash && type) {
+        const { error } = await supabase.auth.verifyOtp({ token_hash, type })
+        if (error) setError('ลิงก์หมดอายุหรือไม่ถูกต้อง กรุณาขอใหม่')
+      }
+      setVerifying(false)
+    }
+    verify()
+  }, [])
 
   const handleReset = async () => {
     if (password !== confirm) return setError('รหัสผ่านไม่ตรงกัน')
@@ -18,6 +34,8 @@ export default function ResetPassword() {
     else setDone(true)
     setLoading(false)
   }
+
+  if (verifying) return <div className="min-h-screen flex items-center justify-center">กำลังตรวจสอบ...</div>
 
   if (done) return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
@@ -59,5 +77,13 @@ export default function ResetPassword() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function ResetPassword() {
+  return (
+    <Suspense fallback={<div className="min-h-screen flex items-center justify-center">กำลังโหลด...</div>}>
+      <ResetForm />
+    </Suspense>
   )
 }
