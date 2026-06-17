@@ -7,6 +7,7 @@ const MODULES = [
   { id: 'sale', icon: '🛒', label: 'ขาย', desc: 'SO / Invoice / รับเงิน' },
   { id: 'purchase', icon: '📦', label: 'จัดซื้อ', desc: 'PO / รับสินค้า / จ่ายเงิน' },
   { id: 'inventory', icon: '🏭', label: 'คลังสินค้า', desc: 'สต็อก / รับเข้า / จ่ายออก' },
+  { id: 'contacts', icon: '👥', label: 'คู่ค้า', desc: 'ลูกค้า / ซัพพลายเออร์' },
   { id: 'ar', icon: '💰', label: 'ลูกหนี้', desc: 'AR / รับเงิน / Aging' },
   { id: 'ap', icon: '💳', label: 'เจ้าหนี้', desc: 'AP / จ่ายเงิน / Aging' },
   { id: 'accounting', icon: '📊', label: 'บัญชี', desc: 'Journal / งบการเงิน' },
@@ -49,11 +50,8 @@ export default function CompanyPage() {
 
         <div className="grid grid-cols-3 gap-4">
           {MODULES.map((m) => (
-            <button
-              key={m.id}
-              onClick={() => window.location.href = `/company/${id}/${m.id}`}
-              className="bg-white rounded-2xl border border-gray-100 p-6 text-left hover:border-indigo-200 hover:shadow-md transition-all group"
-            >
+            <button key={m.id} onClick={() => window.location.href = `/company/${id}/${m.id}`}
+              className="bg-white rounded-2xl border border-gray-100 p-6 text-left hover:border-indigo-200 hover:shadow-md transition-all group">
               <div className="text-3xl mb-3">{m.icon}</div>
               <div className="font-bold text-gray-900 group-hover:text-indigo-600">{m.label}</div>
               <div className="text-xs text-gray-400 mt-1">{m.desc}</div>
