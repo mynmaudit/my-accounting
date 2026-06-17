@@ -1,7 +1,8 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { supabase } from '../../../../lib/supabase'
-import { createJournalEntry, cancelJournalEntry } from '../../../../lib/journal'
+import { createJournalEntry } from '../../../../lib/journal'
+import { exportExcel } from '../../../../lib/excel'
 import { useParams } from 'next/navigation'
 
 const STEPS = [
@@ -10,6 +11,9 @@ const STEPS = [
   { id: 'receipt', label: 'ใบเสร็จรับเงิน', icon: '💰' },
   { id: 'journal', label: 'บันทึกบัญชี', icon: '📒' },
 ]
+
+const today = new Date().toISOString().split('T')[0]
+const firstDay = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]
 
 export default function SalePage() {
   const { id } = useParams()
@@ -60,21 +64,38 @@ export default function SalePage() {
   )
 }
 
+function DateFilter({ dateFrom, dateTo, setDateFrom, setDateTo, onExport, exportLabel }) {
+  return (
+    <div className="flex items-center gap-2 flex-wrap">
+      <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm" />
+      <span className="text-gray-400">ถึง</span>
+      <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm" />
+      {onExport && (
+        <button onClick={onExport} className="bg-green-600 text-white rounded-lg px-3 py-1.5 text-sm font-semibold hover:bg-green-700 whitespace-nowrap">
+          📊 Export Excel
+        </button>
+      )}
+    </div>
+  )
+}
+
 function SOTab({ companyId, company, onCreateInvoice }) {
   const [orders, setOrders] = useState([])
   const [contacts, setContacts] = useState([])
   const [showForm, setShowForm] = useState(false)
   const [editingOrder, setEditingOrder] = useState(null)
   const [filter, setFilter] = useState('active')
+  const [dateFrom, setDateFrom] = useState(firstDay)
+  const [dateTo, setDateTo] = useState(today)
   const [selectedContact, setSelectedContact] = useState(null)
-  const [form, setForm] = useState({ contact_id: '', date: new Date().toISOString().split('T')[0], note: '' })
+  const [form, setForm] = useState({ contact_id: '', date: today, note: '' })
   const [items, setItems] = useState([{ description: '', qty: 1, price: 0 }])
   const [saving, setSaving] = useState(false)
 
-  useEffect(() => { loadOrders(); loadContacts() }, [companyId])
+  useEffect(() => { loadOrders(); loadContacts() }, [companyId, dateFrom, dateTo])
 
   const loadOrders = async () => {
-    const { data } = await supabase.from('transactions').select('*, contacts(code, name)').eq('company_id', companyId).eq('type', 'so').order('created_at', { ascending: false })
+    const { data } = await supabase.from('transactions').select('*, contacts(code, name)').eq('company_id', companyId).eq('type', 'so').gte('date', dateFrom).lte('date', dateTo).order('date', { ascending: false })
     setOrders(data || [])
   }
 
@@ -116,7 +137,7 @@ function SOTab({ companyId, company, onCreateInvoice }) {
   const cancelEdit = () => {
     setEditingOrder(null)
     setShowForm(false)
-    setForm({ contact_id: '', date: new Date().toISOString().split('T')[0], note: '' })
+    setForm({ contact_id: '', date: today, note: '' })
     setItems([{ description: '', qty: 1, price: 0 }])
     setSelectedContact(null)
   }
@@ -161,19 +182,15 @@ function SOTab({ companyId, company, onCreateInvoice }) {
     const subtotal = order.amount
     const vat = vatEnabled ? subtotal * 0.07 : 0
     const total = subtotal + vat
-
     const { error } = await supabase.from('transactions').insert([{
       company_id: companyId, type: 'invoice',
-      date: new Date().toISOString().split('T')[0],
-      description: order.description, doc_number: docNumber,
+      date: today, description: order.description, doc_number: docNumber,
       contact_id: order.contact_id, amount: total,
       category: order.category, note: order.note,
       status: 'open', ref_doc: order.doc_number, items: order.items,
     }])
-
     if (!error) {
       await supabase.from('transactions').update({ status: 'invoiced' }).eq('id', order.id)
-
       const contactName = order.contacts?.name || order.description
       const lines = vatEnabled ? [
         { account_code: '1100', account_name: `ลูกหนี้การค้า (${contactName})`, debit: total, credit: 0 },
@@ -183,18 +200,27 @@ function SOTab({ companyId, company, onCreateInvoice }) {
         { account_code: '1100', account_name: `ลูกหนี้การค้า (${contactName})`, debit: total, credit: 0 },
         { account_code: '4000', account_name: 'รายได้จากการขาย', debit: 0, credit: total },
       ]
-
       await createJournalEntry({
-        companyId, refDoc: docNumber, refType: 'invoice',
-        date: new Date().toISOString().split('T')[0],
+        companyId, refDoc: docNumber, refType: 'invoice', date: today,
         description: `บันทึกการขาย ตามใบแจ้งหนี้เลขที่ ${docNumber} - ${contactName}`,
         lines,
       })
-
       await loadOrders()
       onCreateInvoice()
       alert('สร้างใบแจ้งหนี้ ' + docNumber + ' เรียบร้อยแล้ว')
     } else alert('เกิดข้อผิดพลาด: ' + error.message)
+  }
+
+  const handleExport = () => {
+    const data = filtered.map(o => ({
+      'เลขที่': o.doc_number,
+      'วันที่': o.date,
+      'ลูกค้า': o.description,
+      'ยอดรวม (บาท)': o.amount,
+      'หมายเหตุ': o.note || '',
+      'สถานะ': o.status === 'open' ? 'เปิดอยู่' : o.status === 'invoiced' ? 'ออกใบแจ้งหนี้แล้ว' : 'ยกเลิก',
+    }))
+    exportExcel({ filename: `SO_${dateFrom}_${dateTo}`, sheets: [{ name: 'Sales Order', data }] })
   }
 
   const filtered = orders.filter(o => {
@@ -212,11 +238,11 @@ function SOTab({ companyId, company, onCreateInvoice }) {
 
   return (
     <div>
-      <div className="flex justify-between items-center mb-6">
+      <div className="flex justify-between items-center mb-4 flex-wrap gap-3">
         <div className="flex gap-2 flex-wrap">
           {[['active','เปิดอยู่'],['invoiced','ออกใบแจ้งหนี้แล้ว'],['cancelled','ยกเลิก'],['all','ทั้งหมด']].map(([k,v]) => (
             <button key={k} onClick={() => setFilter(k)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${filter===k ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-500 border-gray-200 hover:border-indigo-300'}`}>
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${filter===k ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-500 border-gray-200'}`}>
               {v}
             </button>
           ))}
@@ -224,6 +250,10 @@ function SOTab({ companyId, company, onCreateInvoice }) {
         <button onClick={() => { setEditingOrder(null); setShowForm(!showForm) }} className="bg-indigo-600 text-white rounded-lg px-4 py-2 text-sm font-semibold hover:bg-indigo-700">
           + สร้าง SO ใหม่
         </button>
+      </div>
+
+      <div className="mb-4">
+        <DateFilter dateFrom={dateFrom} dateTo={dateTo} setDateFrom={setDateFrom} setDateTo={setDateTo} onExport={handleExport} />
       </div>
 
       {showForm && (
@@ -244,7 +274,6 @@ function SOTab({ companyId, company, onCreateInvoice }) {
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
             </div>
           </div>
-
           {selectedContact && (
             <div className="bg-indigo-50 rounded-lg p-3 mb-4 text-sm">
               <div className="font-semibold text-indigo-900">{selectedContact.name}</div>
@@ -252,7 +281,6 @@ function SOTab({ companyId, company, onCreateInvoice }) {
               {selectedContact.address && <div className="text-indigo-600">{selectedContact.address}</div>}
             </div>
           )}
-
           <div className="mb-4">
             <div className="flex justify-between items-center mb-2">
               <label className="text-sm font-semibold text-gray-700">รายการสินค้า/บริการ</label>
@@ -279,13 +307,11 @@ function SOTab({ companyId, company, onCreateInvoice }) {
               </tbody>
             </table>
           </div>
-
           <div className="mb-4">
             <label className="block text-sm font-semibold text-gray-700 mb-1">หมายเหตุ</label>
             <input type="text" value={form.note} onChange={(e) => setForm({...form, note: e.target.value})}
               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="หมายเหตุ (ถ้ามี)" />
           </div>
-
           <div className="flex justify-between items-center">
             <div className="text-xl font-bold text-gray-900">รวม: ฿{total.toLocaleString('th-TH', {minimumFractionDigits: 2})}</div>
             <div className="flex gap-3">
@@ -334,12 +360,15 @@ function SOTab({ companyId, company, onCreateInvoice }) {
 function InvoiceTab({ companyId, company, onReceived }) {
   const [invoices, setInvoices] = useState([])
   const [filter, setFilter] = useState('active')
+  const [dateFrom, setDateFrom] = useState(firstDay)
+  const [dateTo, setDateTo] = useState(today)
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => { loadInvoices() }, [companyId])
+  useEffect(() => { loadInvoices() }, [companyId, dateFrom, dateTo])
 
   const loadInvoices = async () => {
-    const { data } = await supabase.from('transactions').select('*, contacts(*)').eq('company_id', companyId).eq('type', 'invoice').order('created_at', { ascending: false })
+    setLoading(true)
+    const { data } = await supabase.from('transactions').select('*, contacts(*)').eq('company_id', companyId).eq('type', 'invoice').gte('date', dateFrom).lte('date', dateTo).order('date', { ascending: false })
     setInvoices(data || [])
     setLoading(false)
   }
@@ -350,10 +379,8 @@ function InvoiceTab({ companyId, company, onReceived }) {
     const subtotal = vatEnabled ? inv.amount / 1.07 : inv.amount
     const vat = vatEnabled ? inv.amount - subtotal : 0
     const contactName = inv.contacts?.name || inv.description
-
     await supabase.from('transactions').update({ status: 'cancelled' }).eq('id', inv.id)
     if (inv.ref_doc) await supabase.from('transactions').update({ status: 'open' }).eq('company_id', companyId).eq('doc_number', inv.ref_doc)
-
     const lines = vatEnabled ? [
       { account_code: '4000', account_name: 'รายได้จากการขาย', debit: subtotal, credit: 0 },
       { account_code: '2100', account_name: 'ภาษีมูลค่าเพิ่มขาย', debit: vat, credit: 0 },
@@ -362,14 +389,11 @@ function InvoiceTab({ companyId, company, onReceived }) {
       { account_code: '4000', account_name: 'รายได้จากการขาย', debit: inv.amount, credit: 0 },
       { account_code: '1100', account_name: `ลูกหนี้การค้า (${contactName})`, debit: 0, credit: inv.amount },
     ]
-
     await createJournalEntry({
-      companyId, refDoc: inv.doc_number, refType: 'cancel',
-      date: new Date().toISOString().split('T')[0],
+      companyId, refDoc: inv.doc_number, refType: 'cancel', date: today,
       description: `บันทึกยกเลิกการขาย ตามใบแจ้งหนี้เลขที่ ${inv.doc_number} (VOID) - ${contactName}`,
       lines,
     })
-
     await loadInvoices()
   }
 
@@ -382,37 +406,42 @@ function InvoiceTab({ companyId, company, onReceived }) {
       const lastNum = parseInt(data[0].doc_number.split('-')[2]) || 0
       docNumber = `REC-${year}-${String(lastNum + 1).padStart(4, '0')}`
     }
-
     const contactName = inv.contacts?.name || inv.description
     const { error } = await supabase.from('transactions').insert([{
-      company_id: companyId, type: 'receipt',
-      date: new Date().toISOString().split('T')[0],
+      company_id: companyId, type: 'receipt', date: today,
       description: inv.description, doc_number: docNumber,
       contact_id: inv.contact_id, amount: inv.amount,
       category: inv.category, note: inv.note,
       status: 'paid', ref_doc: inv.doc_number, items: inv.items,
     }])
-
     if (!error) {
       await supabase.from('transactions').update({ status: 'paid' }).eq('id', inv.id)
-
       await createJournalEntry({
-        companyId, refDoc: docNumber, refType: 'receipt',
-        date: new Date().toISOString().split('T')[0],
+        companyId, refDoc: docNumber, refType: 'receipt', date: today,
         description: `บันทึกรับชำระหนี้ ตามใบเสร็จเลขที่ ${docNumber} อ้างอิง ${inv.doc_number} - ${contactName}`,
         lines: [
           { account_code: '1000', account_name: 'เงินสด/ธนาคาร', debit: inv.amount, credit: 0 },
           { account_code: '1100', account_name: `ลูกหนี้การค้า (${contactName})`, debit: 0, credit: inv.amount },
         ],
       })
-
       await loadInvoices()
       onReceived()
       alert('บันทึกรับเงิน ' + docNumber + ' เรียบร้อยแล้ว')
     } else alert('เกิดข้อผิดพลาด: ' + error.message)
   }
 
-  const openPrint = (inv) => window.open(`/invoice-print?id=${inv.id}`, '_blank')
+  const handleExport = () => {
+    const data = filtered.map(inv => ({
+      'เลขที่': inv.doc_number,
+      'วันที่': inv.date,
+      'ลูกค้า': inv.contacts?.name || inv.description,
+      'Tax ID': inv.contacts?.tax_id || '',
+      'อ้างอิง SO': inv.ref_doc || '',
+      'ยอดรวม (บาท)': inv.amount,
+      'สถานะ': inv.status === 'open' ? 'รอรับเงิน' : inv.status === 'paid' ? 'รับเงินแล้ว' : 'ยกเลิก',
+    }))
+    exportExcel({ filename: `Invoice_${dateFrom}_${dateTo}`, sheets: [{ name: 'Invoice', data }] })
+  }
 
   const filtered = invoices.filter(o => {
     if (filter === 'active') return o.status === 'open'
@@ -431,16 +460,16 @@ function InvoiceTab({ companyId, company, onReceived }) {
 
   return (
     <div>
-      <div className="flex justify-between items-center mb-6">
+      <div className="flex justify-between items-center mb-4 flex-wrap gap-3">
         <div className="flex gap-2 flex-wrap">
           {[['active','รอรับเงิน'],['paid','รับเงินแล้ว'],['cancelled','ยกเลิก'],['all','ทั้งหมด']].map(([k,v]) => (
             <button key={k} onClick={() => setFilter(k)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${filter===k ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-500 border-gray-200 hover:border-indigo-300'}`}>
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${filter===k ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-500 border-gray-200'}`}>
               {v}
             </button>
           ))}
         </div>
-        <div className="text-sm text-gray-400">ออกจาก SO ได้เลย</div>
+        <DateFilter dateFrom={dateFrom} dateTo={dateTo} setDateFrom={setDateFrom} setDateTo={setDateTo} onExport={handleExport} />
       </div>
 
       {filtered.length === 0 ? (
@@ -464,7 +493,7 @@ function InvoiceTab({ companyId, company, onReceived }) {
                 <div className="text-right flex items-center gap-3">
                   <div className="font-bold text-gray-900 text-lg">฿{inv.amount?.toLocaleString('th-TH', {minimumFractionDigits: 2})}</div>
                   <div className="flex flex-col gap-1">
-                    <button onClick={() => openPrint(inv)} className="bg-indigo-600 text-white rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-indigo-700 whitespace-nowrap">📄 พิมพ์</button>
+                    <button onClick={() => window.open(`/invoice-print?id=${inv.id}`, '_blank')} className="bg-indigo-600 text-white rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-indigo-700 whitespace-nowrap">📄 พิมพ์</button>
                     {inv.status === 'open' && (
                       <>
                         <button onClick={() => receivePayment(inv)} className="bg-green-500 text-white rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-green-600 whitespace-nowrap">💰 รับเงิน</button>
@@ -482,27 +511,43 @@ function InvoiceTab({ companyId, company, onReceived }) {
   )
 }
 
-function ReceiptTab({ companyId, company }) {
+function ReceiptTab({ companyId }) {
   const [receipts, setReceipts] = useState([])
+  const [dateFrom, setDateFrom] = useState(firstDay)
+  const [dateTo, setDateTo] = useState(today)
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    supabase.from('transactions').select('*, contacts(*)').eq('company_id', companyId).eq('type', 'receipt').order('created_at', { ascending: false })
-      .then(({ data }) => { setReceipts(data || []); setLoading(false) })
-  }, [companyId])
+  useEffect(() => { loadReceipts() }, [companyId, dateFrom, dateTo])
 
-  const openPrint = (rec) => window.open(`/receipt-print?id=${rec.id}`, '_blank')
+  const loadReceipts = async () => {
+    setLoading(true)
+    const { data } = await supabase.from('transactions').select('*, contacts(*)').eq('company_id', companyId).eq('type', 'receipt').gte('date', dateFrom).lte('date', dateTo).order('date', { ascending: false })
+    setReceipts(data || [])
+    setLoading(false)
+  }
+
+  const handleExport = () => {
+    const data = receipts.map(rec => ({
+      'เลขที่': rec.doc_number,
+      'วันที่': rec.date,
+      'ลูกค้า': rec.contacts?.name || rec.description,
+      'อ้างอิง Invoice': rec.ref_doc || '',
+      'ยอดรวม (บาท)': rec.amount,
+      'สถานะ': 'รับเงินแล้ว',
+    }))
+    exportExcel({ filename: `Receipt_${dateFrom}_${dateTo}`, sheets: [{ name: 'ใบเสร็จรับเงิน', data }] })
+  }
 
   if (loading) return <div className="text-center py-12 text-gray-400">กำลังโหลด...</div>
 
   return (
     <div>
-      <div className="flex justify-between items-center mb-6">
+      <div className="flex justify-between items-center mb-4 flex-wrap gap-3">
         <h2 className="font-bold text-gray-900">ใบเสร็จรับเงิน</h2>
-        <div className="text-sm text-gray-400">ออกอัตโนมัติเมื่อรับเงินแล้ว</div>
+        <DateFilter dateFrom={dateFrom} dateTo={dateTo} setDateFrom={setDateFrom} setDateTo={setDateTo} onExport={handleExport} />
       </div>
       {receipts.length === 0 ? (
-        <div className="text-center py-12 text-gray-400"><div className="text-4xl mb-2">💰</div><div>ยังไม่มีใบเสร็จ</div></div>
+        <div className="text-center py-12 text-gray-400"><div className="text-4xl mb-2">💰</div><div>ไม่มีรายการ</div></div>
       ) : (
         <div className="space-y-3">
           {receipts.map((rec) => (
@@ -519,7 +564,7 @@ function ReceiptTab({ companyId, company }) {
                 </div>
                 <div className="text-right flex items-center gap-3">
                   <div className="font-bold text-gray-900 text-lg">฿{rec.amount?.toLocaleString('th-TH', {minimumFractionDigits: 2})}</div>
-                  <button onClick={() => openPrint(rec)} className="bg-indigo-600 text-white rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-indigo-700 whitespace-nowrap">📄 พิมพ์</button>
+                  <button onClick={() => window.open(`/receipt-print?id=${rec.id}`, '_blank')} className="bg-indigo-600 text-white rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-indigo-700 whitespace-nowrap">📄 พิมพ์</button>
                 </div>
               </div>
             </div>
@@ -533,8 +578,8 @@ function ReceiptTab({ companyId, company }) {
 function JournalTab({ companyId }) {
   const [entries, setEntries] = useState([])
   const [loading, setLoading] = useState(true)
-  const [dateFrom, setDateFrom] = useState(new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0])
-  const [dateTo, setDateTo] = useState(new Date().toISOString().split('T')[0])
+  const [dateFrom, setDateFrom] = useState(firstDay)
+  const [dateTo, setDateTo] = useState(today)
 
   useEffect(() => { loadEntries() }, [companyId, dateFrom, dateTo])
 
@@ -545,17 +590,29 @@ function JournalTab({ companyId }) {
     setLoading(false)
   }
 
+  const handleExport = () => {
+    const data = entries.flatMap(entry =>
+      entry.journal_lines?.map(line => ({
+        'วันที่': entry.date,
+        'เลขที่เอกสาร': entry.ref_doc,
+        'ประเภท': entry.ref_type === 'invoice' ? 'ขาย' : entry.ref_type === 'receipt' ? 'รับเงิน' : 'ยกเลิก',
+        'คำอธิบาย': entry.description,
+        'รหัสบัญชี': line.account_code,
+        'ชื่อบัญชี': line.account_name,
+        'เดบิต (Dr)': line.debit || '',
+        'เครดิต (Cr)': line.credit || '',
+      })) || []
+    )
+    exportExcel({ filename: `Journal_${dateFrom}_${dateTo}`, sheets: [{ name: 'สมุดรายวัน', data }] })
+  }
+
   if (loading) return <div className="text-center py-12 text-gray-400">กำลังโหลด...</div>
 
   return (
     <div>
-      <div className="flex justify-between items-center mb-6">
+      <div className="flex justify-between items-center mb-6 flex-wrap gap-3">
         <h2 className="font-bold text-gray-900">📒 สมุดรายวัน</h2>
-        <div className="flex items-center gap-2">
-          <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm" />
-          <span className="text-gray-400">ถึง</span>
-          <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm" />
-        </div>
+        <DateFilter dateFrom={dateFrom} dateTo={dateTo} setDateFrom={setDateFrom} setDateTo={setDateTo} onExport={handleExport} />
       </div>
 
       {entries.length === 0 ? (
