@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '../../../../lib/supabase'
 import { createJournalEntry } from '../../../../lib/journal'
 import { exportExcel } from '../../../../lib/excel'
+import { SOItems } from '../../../../lib/SOItem'
 import { useParams } from 'next/navigation'
 
 const STEPS = [
@@ -56,7 +57,7 @@ export default function SalePage() {
         <div className="bg-white rounded-2xl border border-gray-100 p-6">
           {activeTab === 'so' && <SOTab companyId={id} company={company} onCreateInvoice={() => setActiveTab('invoice')} />}
           {activeTab === 'invoice' && <InvoiceTab companyId={id} company={company} onReceived={() => setActiveTab('receipt')} />}
-          {activeTab === 'receipt' && <ReceiptTab companyId={id} company={company} />}
+          {activeTab === 'receipt' && <ReceiptTab companyId={id} />}
           {activeTab === 'journal' && <JournalTab companyId={id} />}
         </div>
       </div>
@@ -64,7 +65,7 @@ export default function SalePage() {
   )
 }
 
-function DateFilter({ dateFrom, dateTo, setDateFrom, setDateTo, onExport, exportLabel }) {
+function DateFilter({ dateFrom, dateTo, setDateFrom, setDateTo, onExport }) {
   return (
     <div className="flex items-center gap-2 flex-wrap">
       <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm" />
@@ -84,6 +85,7 @@ function SOTab({ companyId, company, onCreateInvoice }) {
   const [contacts, setContacts] = useState([])
   const [showForm, setShowForm] = useState(false)
   const [editingOrder, setEditingOrder] = useState(null)
+  const [expandedId, setExpandedId] = useState(null)
   const [filter, setFilter] = useState('active')
   const [dateFrom, setDateFrom] = useState(firstDay)
   const [dateTo, setDateTo] = useState(today)
@@ -132,6 +134,7 @@ function SOTab({ companyId, company, onCreateInvoice }) {
     setSelectedContact(contacts.find(c => c.id === order.contact_id))
     setItems(order.items ? JSON.parse(order.items) : [{ description: '', qty: 1, price: 0 }])
     setShowForm(true)
+    setExpandedId(null)
   }
 
   const cancelEdit = () => {
@@ -181,11 +184,11 @@ function SOTab({ companyId, company, onCreateInvoice }) {
     const vatEnabled = company?.vat_enabled !== false
     const subtotal = order.amount
     const vat = vatEnabled ? subtotal * 0.07 : 0
-    const total = subtotal + vat
+    const totalAmt = subtotal + vat
     const { error } = await supabase.from('transactions').insert([{
-      company_id: companyId, type: 'invoice',
-      date: today, description: order.description, doc_number: docNumber,
-      contact_id: order.contact_id, amount: total,
+      company_id: companyId, type: 'invoice', date: today,
+      description: order.description, doc_number: docNumber,
+      contact_id: order.contact_id, amount: totalAmt,
       category: order.category, note: order.note,
       status: 'open', ref_doc: order.doc_number, items: order.items,
     }])
@@ -193,12 +196,12 @@ function SOTab({ companyId, company, onCreateInvoice }) {
       await supabase.from('transactions').update({ status: 'invoiced' }).eq('id', order.id)
       const contactName = order.contacts?.name || order.description
       const lines = vatEnabled ? [
-        { account_code: '1100', account_name: `ลูกหนี้การค้า (${contactName})`, debit: total, credit: 0 },
+        { account_code: '1100', account_name: `ลูกหนี้การค้า (${contactName})`, debit: totalAmt, credit: 0 },
         { account_code: '4000', account_name: 'รายได้จากการขาย', debit: 0, credit: subtotal },
         { account_code: '2100', account_name: 'ภาษีมูลค่าเพิ่มขาย', debit: 0, credit: vat },
       ] : [
-        { account_code: '1100', account_name: `ลูกหนี้การค้า (${contactName})`, debit: total, credit: 0 },
-        { account_code: '4000', account_name: 'รายได้จากการขาย', debit: 0, credit: total },
+        { account_code: '1100', account_name: `ลูกหนี้การค้า (${contactName})`, debit: totalAmt, credit: 0 },
+        { account_code: '4000', account_name: 'รายได้จากการขาย', debit: 0, credit: totalAmt },
       ]
       await createJournalEntry({
         companyId, refDoc: docNumber, refType: 'invoice', date: today,
@@ -212,15 +215,21 @@ function SOTab({ companyId, company, onCreateInvoice }) {
   }
 
   const handleExport = () => {
-    const data = filtered.map(o => ({
-      'เลขที่': o.doc_number,
-      'วันที่': o.date,
-      'ลูกค้า': o.description,
-      'ยอดรวม (บาท)': o.amount,
-      'หมายเหตุ': o.note || '',
-      'สถานะ': o.status === 'open' ? 'เปิดอยู่' : o.status === 'invoiced' ? 'ออกใบแจ้งหนี้แล้ว' : 'ยกเลิก',
-    }))
-    exportExcel({ filename: `SO_${dateFrom}_${dateTo}`, sheets: [{ name: 'Sales Order', data }] })
+    const rows = filtered.flatMap(o => {
+      const items = o.items ? JSON.parse(o.items) : []
+      return items.map(item => ({
+        'เลขที่ SO': o.doc_number,
+        'วันที่': o.date,
+        'ลูกค้า': o.description,
+        'รายการสินค้า': item.description,
+        'จำนวน': item.qty,
+        'ราคา/หน่วย': item.price,
+        'รวม': Number(item.qty) * Number(item.price),
+        'ยอด SO': o.amount,
+        'สถานะ': o.status === 'open' ? 'เปิดอยู่' : o.status === 'invoiced' ? 'ออกใบแจ้งหนี้แล้ว' : 'ยกเลิก',
+      }))
+    })
+    exportExcel({ filename: `SO_${dateFrom}_${dateTo}`, sheets: [{ name: 'Sales Order', data: rows }] })
   }
 
   const filtered = orders.filter(o => {
@@ -329,26 +338,35 @@ function SOTab({ companyId, company, onCreateInvoice }) {
       ) : (
         <div className="space-y-3">
           {filtered.map((o) => (
-            <div key={o.id} className={`flex items-center justify-between p-4 rounded-xl border transition-all ${o.status === 'cancelled' ? 'bg-gray-50 border-gray-100 opacity-60' : 'border-gray-100 hover:border-indigo-100 hover:bg-indigo-50'}`}>
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className={`font-bold text-sm ${o.status === 'cancelled' ? 'text-gray-400 line-through' : 'text-indigo-600'}`}>{o.doc_number}</span>
-                  <span className="font-semibold text-gray-900">{o.description}</span>
-                </div>
-                <div className="text-sm text-gray-400">{o.date}</div>
-                {o.note && <div className="text-xs text-gray-400 mt-1">หมายเหตุ: {o.note}</div>}
-                <div className="mt-1">{statusLabel(o.status)}</div>
-              </div>
-              <div className="text-right flex items-center gap-3">
-                <div className="font-bold text-gray-900">฿{o.amount?.toLocaleString('th-TH', {minimumFractionDigits: 2})}</div>
-                {o.status === 'open' && (
-                  <div className="flex flex-col gap-1">
-                    <button onClick={() => createInvoice(o)} className="bg-green-500 text-white rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-green-600 whitespace-nowrap">ออกใบแจ้งหนี้</button>
-                    <button onClick={() => openEdit(o)} className="bg-indigo-100 text-indigo-700 rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-indigo-200 whitespace-nowrap">✏️ แก้ไข</button>
-                    <button onClick={() => cancelOrder(o)} className="bg-red-100 text-red-600 rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-red-200 whitespace-nowrap">✕ ยกเลิก</button>
+            <div key={o.id} className={`rounded-xl border transition-all ${o.status === 'cancelled' ? 'bg-gray-50 border-gray-100 opacity-60' : 'border-gray-100 hover:border-indigo-100'}`}>
+              <div className="flex items-center justify-between p-4 cursor-pointer"
+                onClick={() => setExpandedId(expandedId === o.id ? null : o.id)}>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className={`font-bold text-sm ${o.status === 'cancelled' ? 'text-gray-400 line-through' : 'text-indigo-600'}`}>{o.doc_number}</span>
+                    <span className="font-semibold text-gray-900">{o.description}</span>
+                    <span className="text-gray-400 text-xs">{expandedId === o.id ? '▲' : '▼'}</span>
                   </div>
-                )}
+                  <div className="text-sm text-gray-400">{o.date}</div>
+                  {o.note && <div className="text-xs text-gray-400 mt-1">หมายเหตุ: {o.note}</div>}
+                  <div className="mt-1">{statusLabel(o.status)}</div>
+                </div>
+                <div className="text-right flex items-center gap-3" onClick={e => e.stopPropagation()}>
+                  <div className="font-bold text-gray-900">฿{o.amount?.toLocaleString('th-TH', {minimumFractionDigits: 2})}</div>
+                  {o.status === 'open' && (
+                    <div className="flex flex-col gap-1">
+                      <button onClick={() => createInvoice(o)} className="bg-green-500 text-white rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-green-600 whitespace-nowrap">ออกใบแจ้งหนี้</button>
+                      <button onClick={() => openEdit(o)} className="bg-indigo-100 text-indigo-700 rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-indigo-200 whitespace-nowrap">✏️ แก้ไข</button>
+                      <button onClick={() => cancelOrder(o)} className="bg-red-100 text-red-600 rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-red-200 whitespace-nowrap">✕ ยกเลิก</button>
+                    </div>
+                  )}
+                </div>
               </div>
+              {expandedId === o.id && o.items && (
+                <div className="px-4 pb-4 border-t border-gray-100">
+                  <SOItems items={o.items} />
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -431,7 +449,7 @@ function InvoiceTab({ companyId, company, onReceived }) {
   }
 
   const handleExport = () => {
-    const data = filtered.map(inv => ({
+    const rows = filtered.map(inv => ({
       'เลขที่': inv.doc_number,
       'วันที่': inv.date,
       'ลูกค้า': inv.contacts?.name || inv.description,
@@ -440,7 +458,7 @@ function InvoiceTab({ companyId, company, onReceived }) {
       'ยอดรวม (บาท)': inv.amount,
       'สถานะ': inv.status === 'open' ? 'รอรับเงิน' : inv.status === 'paid' ? 'รับเงินแล้ว' : 'ยกเลิก',
     }))
-    exportExcel({ filename: `Invoice_${dateFrom}_${dateTo}`, sheets: [{ name: 'Invoice', data }] })
+    exportExcel({ filename: `Invoice_${dateFrom}_${dateTo}`, sheets: [{ name: 'Invoice', data: rows }] })
   }
 
   const filtered = invoices.filter(o => {
@@ -527,7 +545,7 @@ function ReceiptTab({ companyId }) {
   }
 
   const handleExport = () => {
-    const data = receipts.map(rec => ({
+    const rows = receipts.map(rec => ({
       'เลขที่': rec.doc_number,
       'วันที่': rec.date,
       'ลูกค้า': rec.contacts?.name || rec.description,
@@ -535,7 +553,7 @@ function ReceiptTab({ companyId }) {
       'ยอดรวม (บาท)': rec.amount,
       'สถานะ': 'รับเงินแล้ว',
     }))
-    exportExcel({ filename: `Receipt_${dateFrom}_${dateTo}`, sheets: [{ name: 'ใบเสร็จรับเงิน', data }] })
+    exportExcel({ filename: `Receipt_${dateFrom}_${dateTo}`, sheets: [{ name: 'ใบเสร็จรับเงิน', data: rows }] })
   }
 
   if (loading) return <div className="text-center py-12 text-gray-400">กำลังโหลด...</div>
@@ -591,7 +609,7 @@ function JournalTab({ companyId }) {
   }
 
   const handleExport = () => {
-    const data = entries.flatMap(entry =>
+    const rows = entries.flatMap(entry =>
       entry.journal_lines?.map(line => ({
         'วันที่': entry.date,
         'เลขที่เอกสาร': entry.ref_doc,
@@ -603,7 +621,7 @@ function JournalTab({ companyId }) {
         'เครดิต (Cr)': line.credit || '',
       })) || []
     )
-    exportExcel({ filename: `Journal_${dateFrom}_${dateTo}`, sheets: [{ name: 'สมุดรายวัน', data }] })
+    exportExcel({ filename: `Journal_${dateFrom}_${dateTo}`, sheets: [{ name: 'สมุดรายวัน', data: rows }] })
   }
 
   if (loading) return <div className="text-center py-12 text-gray-400">กำลังโหลด...</div>
@@ -614,7 +632,6 @@ function JournalTab({ companyId }) {
         <h2 className="font-bold text-gray-900">📒 สมุดรายวัน</h2>
         <DateFilter dateFrom={dateFrom} dateTo={dateTo} setDateFrom={setDateFrom} setDateTo={setDateTo} onExport={handleExport} />
       </div>
-
       {entries.length === 0 ? (
         <div className="text-center py-12 text-gray-400"><div className="text-4xl mb-2">📒</div><div>ไม่มีรายการในช่วงเวลานี้</div></div>
       ) : (
