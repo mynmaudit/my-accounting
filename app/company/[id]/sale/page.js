@@ -50,8 +50,8 @@ export default function SalePage() {
 
         <div className="bg-white rounded-2xl border border-gray-100 p-6">
           {activeTab === 'quotation' && <ComingSoon label="ใบเสนอราคา" />}
-          {activeTab === 'so' && <SOTab companyId={id} />}
-          {activeTab === 'invoice' && <ComingSoon label="Invoice" />}
+          {activeTab === 'so' && <SOTab companyId={id} onCreateInvoice={() => setActiveTab('invoice')} />}
+          {activeTab === 'invoice' && <InvoiceTab companyId={id} />}
           {activeTab === 'receipt' && <ComingSoon label="รับเงิน" />}
         </div>
       </div>
@@ -68,7 +68,7 @@ function ComingSoon({ label }) {
   )
 }
 
-function SOTab({ companyId }) {
+function SOTab({ companyId, onCreateInvoice }) {
   const [orders, setOrders] = useState([])
   const [showForm, setShowForm] = useState(false)
   const [form, setForm] = useState({ contact_name: '', date: new Date().toISOString().split('T')[0], note: '' })
@@ -82,14 +82,15 @@ function SOTab({ companyId }) {
     setOrders(data || [])
   }
 
-  const genDocNumber = async () => {
+  const genDocNumber = async (type) => {
     const year = new Date().getFullYear()
-    const { data } = await supabase.from('transactions').select('doc_number').eq('company_id', companyId).eq('type', 'so').like('doc_number', `SO-${year}-%`).order('doc_number', { ascending: false }).limit(1)
+    const prefix = type === 'so' ? 'SO' : 'INV'
+    const { data } = await supabase.from('transactions').select('doc_number').eq('company_id', companyId).eq('type', type).like('doc_number', `${prefix}-${year}-%`).order('doc_number', { ascending: false }).limit(1)
     if (data && data.length > 0 && data[0].doc_number) {
       const lastNum = parseInt(data[0].doc_number.split('-')[2]) || 0
-      return `SO-${year}-${String(lastNum + 1).padStart(4, '0')}`
+      return `${prefix}-${year}-${String(lastNum + 1).padStart(4, '0')}`
     }
-    return `SO-${year}-0001`
+    return `${prefix}-${year}-0001`
   }
 
   const addItem = () => setItems([...items, { description: '', qty: 1, price: 0 }])
@@ -101,11 +102,10 @@ function SOTab({ companyId }) {
     if (!form.contact_name) return alert('กรุณากรอกชื่อลูกค้า')
     if (total <= 0) return alert('กรุณากรอกรายการสินค้าและราคา')
     setSaving(true)
-    const docNumber = await genDocNumber()
+    const docNumber = await genDocNumber('so')
     const { error } = await supabase.from('transactions').insert([{
       company_id: companyId, type: 'so', date: form.date,
-      description: form.contact_name,
-      doc_number: docNumber,
+      description: form.contact_name, doc_number: docNumber,
       amount: total, category: form.contact_name,
       note: form.note, status: 'open',
     }])
@@ -114,10 +114,24 @@ function SOTab({ companyId }) {
       setShowForm(false)
       setForm({ contact_name: '', date: new Date().toISOString().split('T')[0], note: '' })
       setItems([{ description: '', qty: 1, price: 0 }])
-    } else {
-      alert('เกิดข้อผิดพลาด: ' + error.message)
-    }
+    } else alert('เกิดข้อผิดพลาด: ' + error.message)
     setSaving(false)
+  }
+
+  const createInvoice = async (order) => {
+    const docNumber = await genDocNumber('invoice')
+    const { error } = await supabase.from('transactions').insert([{
+      company_id: companyId, type: 'invoice', date: new Date().toISOString().split('T')[0],
+      description: order.description, doc_number: docNumber,
+      amount: order.amount, category: order.category,
+      note: order.note, status: 'open', ref_doc: order.doc_number,
+    }])
+    if (!error) {
+      await supabase.from('transactions').update({ status: 'invoiced' }).eq('id', order.id)
+      await loadOrders()
+      onCreateInvoice()
+      alert('สร้าง Invoice ' + docNumber + ' เรียบร้อยแล้ว')
+    } else alert('เกิดข้อผิดพลาด: ' + error.message)
   }
 
   return (
@@ -144,7 +158,6 @@ function SOTab({ companyId }) {
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
             </div>
           </div>
-
           <div className="mb-4">
             <div className="flex justify-between items-center mb-2">
               <label className="text-sm font-semibold text-gray-700">รายการสินค้า/บริการ</label>
@@ -162,33 +175,20 @@ function SOTab({ companyId }) {
               <tbody>
                 {items.map((item, i) => (
                   <tr key={i} className="border-b border-gray-100">
-                    <td className="py-2 pr-2">
-                      <input className="w-full border border-gray-200 rounded-lg px-3 py-2" placeholder="รายละเอียด"
-                        value={item.description} onChange={(e) => updateItem(i, 'description', e.target.value)} />
-                    </td>
-                    <td className="py-2 px-2">
-                      <input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-center" type="number" min="1"
-                        value={item.qty} onChange={(e) => updateItem(i, 'qty', e.target.value)} />
-                    </td>
-                    <td className="py-2 pl-2">
-                      <input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-right" type="number" min="0"
-                        value={item.price} onChange={(e) => updateItem(i, 'price', e.target.value)} />
-                    </td>
-                    <td className="py-2 pl-2 text-center">
-                      <button onClick={() => removeItem(i)} className="text-gray-300 hover:text-red-400 text-xl">×</button>
-                    </td>
+                    <td className="py-2 pr-2"><input className="w-full border border-gray-200 rounded-lg px-3 py-2" placeholder="รายละเอียด" value={item.description} onChange={(e) => updateItem(i, 'description', e.target.value)} /></td>
+                    <td className="py-2 px-2"><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-center" type="number" min="1" value={item.qty} onChange={(e) => updateItem(i, 'qty', e.target.value)} /></td>
+                    <td className="py-2 pl-2"><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-right" type="number" min="0" value={item.price} onChange={(e) => updateItem(i, 'price', e.target.value)} /></td>
+                    <td className="py-2 pl-2 text-center"><button onClick={() => removeItem(i)} className="text-gray-300 hover:text-red-400 text-xl">×</button></td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-
           <div className="mb-4">
             <label className="block text-sm font-semibold text-gray-700 mb-1">หมายเหตุ</label>
             <input type="text" value={form.note} onChange={(e) => setForm({...form, note: e.target.value})}
               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" placeholder="หมายเหตุ (ถ้ามี)" />
           </div>
-
           <div className="flex justify-between items-center">
             <div className="text-xl font-bold text-gray-900">รวม: ฿{total.toLocaleString('th-TH', {minimumFractionDigits: 2})}</div>
             <div className="flex gap-3">
@@ -202,25 +202,79 @@ function SOTab({ companyId }) {
       )}
 
       {orders.length === 0 ? (
-        <div className="text-center py-12 text-gray-400">
-          <div className="text-4xl mb-2">🛒</div>
-          <div>ยังไม่มี Sales Order</div>
-        </div>
+        <div className="text-center py-12 text-gray-400"><div className="text-4xl mb-2">🛒</div><div>ยังไม่มี Sales Order</div></div>
       ) : (
         <div className="space-y-3">
           {orders.map((o) => (
             <div key={o.id} className="flex items-center justify-between p-4 rounded-xl border border-gray-100 hover:border-indigo-100 hover:bg-indigo-50 transition-all">
               <div>
                 <div className="flex items-center gap-2">
-                  <span className="font-bold text-indigo-600 text-sm">{o.doc_number || 'SO-XXXX'}</span>
+                  <span className="font-bold text-indigo-600 text-sm">{o.doc_number}</span>
                   <span className="font-semibold text-gray-900">{o.description}</span>
                 </div>
                 <div className="text-sm text-gray-400">{o.date}</div>
                 {o.note && <div className="text-xs text-gray-400 mt-1">หมายเหตุ: {o.note}</div>}
               </div>
+              <div className="text-right flex items-center gap-4">
+                <div>
+                  <div className="font-bold text-gray-900">฿{o.amount?.toLocaleString('th-TH', {minimumFractionDigits: 2})}</div>
+                  <div className={`text-xs font-medium ${o.status === 'invoiced' ? 'text-gray-400' : 'text-green-500'}`}>
+                    {o.status === 'invoiced' ? '✓ ออก Invoice แล้ว' : '● เปิดอยู่'}
+                  </div>
+                </div>
+                {o.status !== 'invoiced' && (
+                  <button onClick={() => createInvoice(o)}
+                    className="bg-green-500 text-white rounded-lg px-3 py-2 text-xs font-semibold hover:bg-green-600 whitespace-nowrap">
+                    สร้าง Invoice
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function InvoiceTab({ companyId }) {
+  const [invoices, setInvoices] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    supabase.from('transactions').select('*').eq('company_id', companyId).eq('type', 'invoice').order('created_at', { ascending: false })
+      .then(({ data }) => { setInvoices(data || []); setLoading(false) })
+  }, [companyId])
+
+  if (loading) return <div className="text-center py-12 text-gray-400">กำลังโหลด...</div>
+
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-6">
+        <h2 className="font-bold text-gray-900">Invoice</h2>
+        <div className="text-sm text-gray-400">สร้าง Invoice จาก SO ได้เลย</div>
+      </div>
+      {invoices.length === 0 ? (
+        <div className="text-center py-12 text-gray-400">
+          <div className="text-4xl mb-2">🧾</div>
+          <div>ยังไม่มี Invoice</div>
+          <div className="text-sm mt-1">ไปที่ Sales Order แล้วกด "สร้าง Invoice"</div>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {invoices.map((inv) => (
+            <div key={inv.id} className="flex items-center justify-between p-4 rounded-xl border border-gray-100 hover:border-green-100 hover:bg-green-50 transition-all">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="font-bold text-green-600 text-sm">{inv.doc_number}</span>
+                  <span className="font-semibold text-gray-900">{inv.description}</span>
+                </div>
+                <div className="text-sm text-gray-400">{inv.date}</div>
+                {inv.ref_doc && <div className="text-xs text-gray-400 mt-1">อ้างอิง: {inv.ref_doc}</div>}
+              </div>
               <div className="text-right">
-                <div className="font-bold text-gray-900">฿{o.amount?.toLocaleString('th-TH', {minimumFractionDigits: 2})}</div>
-                <div className="text-xs text-green-500 font-medium">● เปิดอยู่</div>
+                <div className="font-bold text-gray-900">฿{inv.amount?.toLocaleString('th-TH', {minimumFractionDigits: 2})}</div>
+                <div className="text-xs text-orange-500 font-medium">● รอรับเงิน</div>
               </div>
             </div>
           ))}
