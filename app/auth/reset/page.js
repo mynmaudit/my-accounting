@@ -1,28 +1,19 @@
 'use client'
 import { useState, useEffect, Suspense } from 'react'
 import { supabase } from '../../../lib/supabase'
-import { useSearchParams } from 'next/navigation'
 
 function ResetForm() {
-  const searchParams = useSearchParams()
   const [password, setPassword] = useState('')
   const [confirm, setConfirm] = useState('')
   const [loading, setLoading] = useState(false)
-  const [verifying, setVerifying] = useState(true)
+  const [ready, setReady] = useState(false)
   const [done, setDone] = useState(false)
   const [error, setError] = useState('')
 
   useEffect(() => {
-    const verify = async () => {
-      const token_hash = searchParams.get('token_hash')
-      const type = searchParams.get('type')
-      if (token_hash && type) {
-        const { error } = await supabase.auth.verifyOtp({ token_hash, type })
-        if (error) setError('ลิงก์หมดอายุหรือไม่ถูกต้อง กรุณาขอใหม่')
-      }
-      setVerifying(false)
-    }
-    verify()
+    supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') setReady(true)
+    })
   }, [])
 
   const handleReset = async () => {
@@ -35,8 +26,6 @@ function ResetForm() {
     setLoading(false)
   }
 
-  if (verifying) return <div className="min-h-screen flex items-center justify-center">กำลังตรวจสอบ...</div>
-
   if (done) return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 w-full max-w-md text-center">
@@ -44,6 +33,19 @@ function ResetForm() {
         <h1 className="text-xl font-bold text-gray-900 mb-2">เปลี่ยนรหัสผ่านสำเร็จ</h1>
         <button onClick={() => window.location.href = '/'} className="mt-4 bg-indigo-600 text-white rounded-lg px-6 py-2 text-sm font-semibold hover:bg-indigo-700">
           เข้าสู่ระบบ
+        </button>
+      </div>
+    </div>
+  )
+
+  if (!ready) return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center p-4">
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-8 w-full max-w-md text-center">
+        <div className="text-4xl mb-4">⏳</div>
+        <p className="text-gray-500">กำลังตรวจสอบลิงก์... กรุณารอสักครู่</p>
+        <p className="text-sm text-gray-400 mt-2">ถ้านานเกินไป กรุณาขอลิงก์ใหม่</p>
+        <button onClick={() => window.location.href = '/'} className="mt-4 text-indigo-600 text-sm hover:underline">
+          กลับหน้าหลัก
         </button>
       </div>
     </div>
@@ -82,7 +84,7 @@ function ResetForm() {
 
 export default function ResetPassword() {
   return (
-    <Suspense fallback={<div className="min-h-screen flex items-center justify-center">กำลังโหลด...</div>}>
+    <Suspense>
       <ResetForm />
     </Suspense>
   )
