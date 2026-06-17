@@ -51,7 +51,7 @@ export default function SalePage() {
         <div className="bg-white rounded-2xl border border-gray-100 p-6">
           {activeTab === 'quotation' && <ComingSoon label="ใบเสนอราคา" />}
           {activeTab === 'so' && <SOTab companyId={id} onCreateInvoice={() => setActiveTab('invoice')} />}
-          {activeTab === 'invoice' && <InvoiceTab companyId={id} />}
+          {activeTab === 'invoice' && <InvoiceTab companyId={id} company={company} />}
           {activeTab === 'receipt' && <ComingSoon label="รับเงิน" />}
         </div>
       </div>
@@ -77,10 +77,7 @@ function SOTab({ companyId, onCreateInvoice }) {
   const [items, setItems] = useState([{ description: '', qty: 1, price: 0 }])
   const [saving, setSaving] = useState(false)
 
-  useEffect(() => {
-    loadOrders()
-    loadContacts()
-  }, [companyId])
+  useEffect(() => { loadOrders(); loadContacts() }, [companyId])
 
   const loadOrders = async () => {
     const { data } = await supabase.from('transactions').select('*, contacts(code, name)').eq('company_id', companyId).eq('type', 'so').order('created_at', { ascending: false })
@@ -121,11 +118,10 @@ function SOTab({ companyId, onCreateInvoice }) {
     const docNumber = await genDocNumber('so')
     const { error } = await supabase.from('transactions').insert([{
       company_id: companyId, type: 'so', date: form.date,
-      description: selectedContact?.name,
-      doc_number: docNumber, contact_id: form.contact_id,
-      amount: total, category: selectedContact?.name,
-      note: form.note, status: 'open',
-      items: JSON.stringify(items),
+      description: selectedContact?.name, doc_number: docNumber,
+      contact_id: form.contact_id, amount: total,
+      category: selectedContact?.name, note: form.note,
+      status: 'open', items: JSON.stringify(items),
     }])
     if (!error) {
       await loadOrders()
@@ -143,10 +139,9 @@ function SOTab({ companyId, onCreateInvoice }) {
       company_id: companyId, type: 'invoice',
       date: new Date().toISOString().split('T')[0],
       description: order.description, doc_number: docNumber,
-      contact_id: order.contact_id,
-      amount: order.amount, category: order.category,
-      note: order.note, status: 'open',
-      ref_doc: order.doc_number, items: order.items,
+      contact_id: order.contact_id, amount: order.amount,
+      category: order.category, note: order.note,
+      status: 'open', ref_doc: order.doc_number, items: order.items,
     }])
     if (!error) {
       await supabase.from('transactions').update({ status: 'invoiced' }).eq('id', order.id)
@@ -160,9 +155,7 @@ function SOTab({ companyId, onCreateInvoice }) {
     <div>
       <div className="flex justify-between items-center mb-6">
         <h2 className="font-bold text-gray-900">Sales Order</h2>
-        <button onClick={() => setShowForm(!showForm)} className="bg-indigo-600 text-white rounded-lg px-4 py-2 text-sm font-semibold hover:bg-indigo-700">
-          + สร้าง SO ใหม่
-        </button>
+        <button onClick={() => setShowForm(!showForm)} className="bg-indigo-600 text-white rounded-lg px-4 py-2 text-sm font-semibold hover:bg-indigo-700">+ สร้าง SO ใหม่</button>
       </div>
 
       {showForm && (
@@ -174,13 +167,9 @@ function SOTab({ companyId, onCreateInvoice }) {
               <select value={form.contact_id} onChange={(e) => handleSelectContact(e.target.value)}
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white">
                 <option value="">-- เลือกลูกค้า --</option>
-                {contacts.map(c => (
-                  <option key={c.id} value={c.id}>{c.code} — {c.name}</option>
-                ))}
+                {contacts.map(c => <option key={c.id} value={c.id}>{c.code} — {c.name}</option>)}
               </select>
-              {contacts.length === 0 && (
-                <p className="text-xs text-red-500 mt-1">ยังไม่มีลูกค้า <a href={`/company/${companyId}/contacts`} className="underline">เพิ่มที่นี่</a></p>
-              )}
+              {contacts.length === 0 && <p className="text-xs text-red-500 mt-1">ยังไม่มีลูกค้า <a href={`/company/${companyId}/contacts`} className="underline">เพิ่มที่นี่</a></p>}
             </div>
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-1">วันที่ *</label>
@@ -278,14 +267,96 @@ function SOTab({ companyId, onCreateInvoice }) {
   )
 }
 
-function InvoiceTab({ companyId }) {
+function InvoiceTab({ companyId, company }) {
   const [invoices, setInvoices] = useState([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    supabase.from('transactions').select('*, contacts(code, name, tax_id, address)').eq('company_id', companyId).eq('type', 'invoice').order('created_at', { ascending: false })
+    supabase.from('transactions').select('*, contacts(*)').eq('company_id', companyId).eq('type', 'invoice').order('created_at', { ascending: false })
       .then(({ data }) => { setInvoices(data || []); setLoading(false) })
   }, [companyId])
+
+  const downloadPDF = async (inv) => {
+    const { default: jsPDF } = await import('jspdf')
+    const { default: autoTable } = await import('jspdf-autotable')
+
+    const doc = new jsPDF()
+    const contact = inv.contacts
+    const pageWidth = doc.internal.pageSize.getWidth()
+
+    // Header
+    doc.setFontSize(18)
+    doc.setFont('helvetica', 'bold')
+    doc.text('TAX INVOICE / RECEIPT', pageWidth / 2, 20, { align: 'center' })
+    doc.setFontSize(11)
+    doc.text('ใบกำกับภาษี / ใบเสร็จรับเงิน', pageWidth / 2, 27, { align: 'center' })
+
+    // Seller info
+    doc.setFontSize(10)
+    doc.setFont('helvetica', 'bold')
+    doc.text('ผู้ขาย (Seller)', 14, 40)
+    doc.setFont('helvetica', 'normal')
+    doc.text(company?.name || '', 14, 47)
+    if (company?.address) doc.text(company.address, 14, 53)
+    if (company?.tax_id) doc.text('เลขผู้เสียภาษี: ' + company.tax_id, 14, 59)
+    if (company?.phone) doc.text('โทร: ' + company.phone, 14, 65)
+
+    // Buyer info
+    doc.setFont('helvetica', 'bold')
+    doc.text('ผู้ซื้อ (Buyer)', 110, 40)
+    doc.setFont('helvetica', 'normal')
+    doc.text(contact?.name || inv.description || '', 110, 47)
+    if (contact?.address) doc.text(contact.address, 110, 53)
+    if (contact?.tax_id) doc.text('เลขผู้เสียภาษี: ' + contact.tax_id, 110, 59)
+    if (contact?.phone) doc.text('โทร: ' + contact.phone, 110, 65)
+
+    // Doc info
+    doc.setFont('helvetica', 'bold')
+    doc.text('เลขที่: ' + (inv.doc_number || ''), 110, 78)
+    doc.text('วันที่: ' + (inv.date || ''), 110, 84)
+    if (inv.ref_doc) doc.text('อ้างอิง: ' + inv.ref_doc, 110, 90)
+
+    // Items table
+    const items = inv.items ? JSON.parse(inv.items) : [{ description: inv.description, qty: 1, price: inv.amount }]
+    const subtotal = items.reduce((s, i) => s + (Number(i.qty) * Number(i.price)), 0)
+    const vat = subtotal * 0.07
+    const total = subtotal + vat
+
+    autoTable(doc, {
+      startY: 98,
+      head: [['#', 'รายละเอียด', 'จำนวน', 'ราคา/หน่วย', 'รวม']],
+      body: [
+        ...items.map((item, i) => [
+          i + 1,
+          item.description || '',
+          item.qty,
+          Number(item.price).toLocaleString('th-TH', {minimumFractionDigits: 2}),
+          (Number(item.qty) * Number(item.price)).toLocaleString('th-TH', {minimumFractionDigits: 2}),
+        ]),
+      ],
+      foot: [
+        ['', '', '', 'ราคาก่อนภาษี', subtotal.toLocaleString('th-TH', {minimumFractionDigits: 2})],
+        ['', '', '', 'ภาษีมูลค่าเพิ่ม 7%', vat.toLocaleString('th-TH', {minimumFractionDigits: 2})],
+        ['', '', '', 'รวมทั้งสิ้น', total.toLocaleString('th-TH', {minimumFractionDigits: 2})],
+      ],
+      styles: { fontSize: 9 },
+      headStyles: { fillColor: [79, 70, 229] },
+      footStyles: { fontStyle: 'bold' },
+    })
+
+    const finalY = doc.lastAutoTable.finalY + 20
+    doc.setFontSize(9)
+    doc.text('ลงชื่อผู้รับเงิน ................................', 14, finalY + 10)
+    doc.text('วันที่ ................................', 14, finalY + 18)
+    doc.text('ลงชื่อผู้จ่ายเงิน ................................', 110, finalY + 10)
+    doc.text('วันที่ ................................', 110, finalY + 18)
+
+    if (inv.note) {
+      doc.text('หมายเหตุ: ' + inv.note, 14, finalY + 30)
+    }
+
+    doc.save(`${inv.doc_number}.pdf`)
+  }
 
   if (loading) return <div className="text-center py-12 text-gray-400">กำลังโหลด...</div>
 
@@ -304,7 +375,7 @@ function InvoiceTab({ companyId }) {
       ) : (
         <div className="space-y-3">
           {invoices.map((inv) => (
-            <div key={inv.id} className="p-4 rounded-xl border border-gray-100 hover:border-green-100 hover:bg-green-50 transition-all">
+            <div key={inv.id} className="p-4 rounded-xl border border-gray-100 hover:border-green-100 transition-all">
               <div className="flex items-center justify-between">
                 <div>
                   <div className="flex items-center gap-2">
@@ -315,9 +386,15 @@ function InvoiceTab({ companyId }) {
                   <div className="text-sm text-gray-400">{inv.date}</div>
                   {inv.ref_doc && <div className="text-xs text-gray-400">อ้างอิง: {inv.ref_doc}</div>}
                 </div>
-                <div className="text-right">
-                  <div className="font-bold text-gray-900 text-lg">฿{inv.amount?.toLocaleString('th-TH', {minimumFractionDigits: 2})}</div>
-                  <div className="text-xs text-orange-500 font-medium">● รอรับเงิน</div>
+                <div className="text-right flex items-center gap-3">
+                  <div>
+                    <div className="font-bold text-gray-900 text-lg">฿{inv.amount?.toLocaleString('th-TH', {minimumFractionDigits: 2})}</div>
+                    <div className="text-xs text-orange-500 font-medium">● รอรับเงิน</div>
+                  </div>
+                  <button onClick={() => downloadPDF(inv)}
+                    className="bg-indigo-600 text-white rounded-lg px-3 py-2 text-xs font-semibold hover:bg-indigo-700 whitespace-nowrap">
+                    📄 Download PDF
+                  </button>
                 </div>
               </div>
             </div>
