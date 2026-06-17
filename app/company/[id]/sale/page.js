@@ -276,8 +276,8 @@ function InvoiceTab({ companyId, company }) {
       .then(({ data }) => { setInvoices(data || []); setLoading(false) })
   }, [companyId])
 
-  const downloadPDF = async (inv) => {
-    const { default: jsPDF } = await import('jspdf')
+  const downloadPDF = (inv) => {
+    window.open(`/invoice-print?id=${inv.id}`, '_blank')
     const { default: autoTable } = await import('jspdf-autotable')
 
     const doc = new jsPDF()
