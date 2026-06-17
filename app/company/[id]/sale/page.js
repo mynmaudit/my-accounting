@@ -4,10 +4,9 @@ import { supabase } from '../../../../lib/supabase'
 import { useParams } from 'next/navigation'
 
 const STEPS = [
-  { id: 'quotation', label: 'ใบเสนอราคา', icon: '📋' },
   { id: 'so', label: 'Sales Order', icon: '🛒' },
-  { id: 'invoice', label: 'Invoice', icon: '🧾' },
-  { id: 'receipt', label: 'รับเงิน', icon: '💰' },
+  { id: 'invoice', label: 'ใบแจ้งหนี้/ใบกำกับภาษี', icon: '🧾' },
+  { id: 'receipt', label: 'ใบเสร็จรับเงิน', icon: '💰' },
 ]
 
 export default function SalePage() {
@@ -49,21 +48,11 @@ export default function SalePage() {
         </div>
 
         <div className="bg-white rounded-2xl border border-gray-100 p-6">
-          {activeTab === 'quotation' && <ComingSoon label="ใบเสนอราคา" />}
           {activeTab === 'so' && <SOTab companyId={id} onCreateInvoice={() => setActiveTab('invoice')} />}
-          {activeTab === 'invoice' && <InvoiceTab companyId={id} company={company} />}
-          {activeTab === 'receipt' && <ComingSoon label="รับเงิน" />}
+          {activeTab === 'invoice' && <InvoiceTab companyId={id} company={company} onReceived={() => setActiveTab('receipt')} />}
+          {activeTab === 'receipt' && <ReceiptTab companyId={id} company={company} />}
         </div>
       </div>
-    </div>
-  )
-}
-
-function ComingSoon({ label }) {
-  return (
-    <div className="text-center py-16 text-gray-400">
-      <div className="text-4xl mb-3">🚧</div>
-      <div className="font-semibold">{label} — กำลังพัฒนา</div>
     </div>
   )
 }
@@ -91,7 +80,8 @@ function SOTab({ companyId, onCreateInvoice }) {
 
   const genDocNumber = async (type) => {
     const year = new Date().getFullYear()
-    const prefix = type === 'so' ? 'SO' : 'INV'
+    const prefixes = { so: 'SO', invoice: 'INV', receipt: 'REC' }
+    const prefix = prefixes[type]
     const { data } = await supabase.from('transactions').select('doc_number').eq('company_id', companyId).eq('type', type).like('doc_number', `${prefix}-${year}-%`).order('doc_number', { ascending: false }).limit(1)
     if (data && data.length > 0 && data[0].doc_number) {
       const lastNum = parseInt(data[0].doc_number.split('-')[2]) || 0
@@ -106,8 +96,7 @@ function SOTab({ companyId, onCreateInvoice }) {
   const total = items.reduce((s, i) => s + (Number(i.qty) * Number(i.price)), 0)
 
   const handleSelectContact = (contactId) => {
-    const contact = contacts.find(c => c.id === contactId)
-    setSelectedContact(contact)
+    setSelectedContact(contacts.find(c => c.id === contactId))
     setForm({...form, contact_id: contactId})
   }
 
@@ -147,7 +136,7 @@ function SOTab({ companyId, onCreateInvoice }) {
       await supabase.from('transactions').update({ status: 'invoiced' }).eq('id', order.id)
       await loadOrders()
       onCreateInvoice()
-      alert('สร้าง Invoice ' + docNumber + ' เรียบร้อยแล้ว')
+      alert('สร้างใบแจ้งหนี้ ' + docNumber + ' เรียบร้อยแล้ว')
     } else alert('เกิดข้อผิดพลาด: ' + error.message)
   }
 
@@ -250,12 +239,12 @@ function SOTab({ companyId, onCreateInvoice }) {
                 <div>
                   <div className="font-bold text-gray-900">฿{o.amount?.toLocaleString('th-TH', {minimumFractionDigits: 2})}</div>
                   <div className={`text-xs font-medium ${o.status === 'invoiced' ? 'text-gray-400' : 'text-green-500'}`}>
-                    {o.status === 'invoiced' ? '✓ ออก Invoice แล้ว' : '● เปิดอยู่'}
+                    {o.status === 'invoiced' ? '✓ ออกใบแจ้งหนี้แล้ว' : '● เปิดอยู่'}
                   </div>
                 </div>
                 {o.status !== 'invoiced' && (
                   <button onClick={() => createInvoice(o)} className="bg-green-500 text-white rounded-lg px-3 py-2 text-xs font-semibold hover:bg-green-600 whitespace-nowrap">
-                    สร้าง Invoice
+                    ออกใบแจ้งหนี้
                   </button>
                 )}
               </div>
@@ -267,32 +256,62 @@ function SOTab({ companyId, onCreateInvoice }) {
   )
 }
 
-function InvoiceTab({ companyId, company }) {
+function InvoiceTab({ companyId, company, onReceived }) {
   const [invoices, setInvoices] = useState([])
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    supabase.from('transactions').select('*, contacts(*)').eq('company_id', companyId).eq('type', 'invoice').order('created_at', { ascending: false })
-      .then(({ data }) => { setInvoices(data || []); setLoading(false) })
-  }, [companyId])
+  useEffect(() => { loadInvoices() }, [companyId])
 
-  const openPrint = (inv) => {
-    window.open(`/invoice-print?id=${inv.id}`, '_blank')
+  const loadInvoices = async () => {
+    const { data } = await supabase.from('transactions').select('*, contacts(*)').eq('company_id', companyId).eq('type', 'invoice').order('created_at', { ascending: false })
+    setInvoices(data || [])
+    setLoading(false)
   }
+
+  const genDocNumber = async () => {
+    const year = new Date().getFullYear()
+    const { data } = await supabase.from('transactions').select('doc_number').eq('company_id', companyId).eq('type', 'receipt').like('doc_number', `REC-${year}-%`).order('doc_number', { ascending: false }).limit(1)
+    if (data && data.length > 0 && data[0].doc_number) {
+      const lastNum = parseInt(data[0].doc_number.split('-')[2]) || 0
+      return `REC-${year}-${String(lastNum + 1).padStart(4, '0')}`
+    }
+    return `REC-${year}-0001`
+  }
+
+  const receivePayment = async (inv) => {
+    if (!confirm(`ยืนยันรับเงิน ฿${inv.amount?.toLocaleString('th-TH')} จาก ${inv.description}?`)) return
+    const docNumber = await genDocNumber()
+    const { error } = await supabase.from('transactions').insert([{
+      company_id: companyId, type: 'receipt',
+      date: new Date().toISOString().split('T')[0],
+      description: inv.description, doc_number: docNumber,
+      contact_id: inv.contact_id, amount: inv.amount,
+      category: inv.category, note: inv.note,
+      status: 'paid', ref_doc: inv.doc_number, items: inv.items,
+    }])
+    if (!error) {
+      await supabase.from('transactions').update({ status: 'paid' }).eq('id', inv.id)
+      await loadInvoices()
+      onReceived()
+      alert('บันทึกรับเงิน ' + docNumber + ' เรียบร้อยแล้ว')
+    } else alert('เกิดข้อผิดพลาด: ' + error.message)
+  }
+
+  const openPrint = (inv) => window.open(`/invoice-print?id=${inv.id}`, '_blank')
 
   if (loading) return <div className="text-center py-12 text-gray-400">กำลังโหลด...</div>
 
   return (
     <div>
       <div className="flex justify-between items-center mb-6">
-        <h2 className="font-bold text-gray-900">Invoice</h2>
-        <div className="text-sm text-gray-400">สร้าง Invoice จาก SO ได้เลย</div>
+        <h2 className="font-bold text-gray-900">ใบแจ้งหนี้ / ใบกำกับภาษี</h2>
+        <div className="text-sm text-gray-400">ออกจาก SO ได้เลย</div>
       </div>
       {invoices.length === 0 ? (
         <div className="text-center py-12 text-gray-400">
           <div className="text-4xl mb-2">🧾</div>
-          <div>ยังไม่มี Invoice</div>
-          <div className="text-sm mt-1">ไปที่ Sales Order แล้วกด "สร้าง Invoice"</div>
+          <div>ยังไม่มีใบแจ้งหนี้</div>
+          <div className="text-sm mt-1">ไปที่ Sales Order แล้วกด "ออกใบแจ้งหนี้"</div>
         </div>
       ) : (
         <div className="space-y-3">
@@ -311,11 +330,75 @@ function InvoiceTab({ companyId, company }) {
                 <div className="text-right flex items-center gap-3">
                   <div>
                     <div className="font-bold text-gray-900 text-lg">฿{inv.amount?.toLocaleString('th-TH', {minimumFractionDigits: 2})}</div>
-                    <div className="text-xs text-orange-500 font-medium">● รอรับเงิน</div>
+                    <div className={`text-xs font-medium ${inv.status === 'paid' ? 'text-gray-400' : 'text-orange-500'}`}>
+                      {inv.status === 'paid' ? '✓ รับเงินแล้ว' : '● รอรับเงิน'}
+                    </div>
                   </div>
-                  <button onClick={() => openPrint(inv)}
-                    className="bg-indigo-600 text-white rounded-lg px-3 py-2 text-xs font-semibold hover:bg-indigo-700 whitespace-nowrap">
-                    📄 พิมพ์ / PDF
+                  <div className="flex flex-col gap-2">
+                    <button onClick={() => openPrint(inv)} className="bg-indigo-600 text-white rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-indigo-700 whitespace-nowrap">
+                      📄 พิมพ์
+                    </button>
+                    {inv.status !== 'paid' && (
+                      <button onClick={() => receivePayment(inv)} className="bg-green-500 text-white rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-green-600 whitespace-nowrap">
+                        💰 รับเงิน
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ReceiptTab({ companyId, company }) {
+  const [receipts, setReceipts] = useState([])
+  const [loading, setLoading] = useState(true)
+
+  useEffect(() => {
+    supabase.from('transactions').select('*, contacts(*)').eq('company_id', companyId).eq('type', 'receipt').order('created_at', { ascending: false })
+      .then(({ data }) => { setReceipts(data || []); setLoading(false) })
+  }, [companyId])
+
+  const openPrint = (rec) => window.open(`/receipt-print?id=${rec.id}`, '_blank')
+
+  if (loading) return <div className="text-center py-12 text-gray-400">กำลังโหลด...</div>
+
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-6">
+        <h2 className="font-bold text-gray-900">ใบเสร็จรับเงิน</h2>
+        <div className="text-sm text-gray-400">ออกอัตโนมัติเมื่อรับเงินแล้ว</div>
+      </div>
+      {receipts.length === 0 ? (
+        <div className="text-center py-12 text-gray-400">
+          <div className="text-4xl mb-2">💰</div>
+          <div>ยังไม่มีใบเสร็จ</div>
+          <div className="text-sm mt-1">กด "รับเงิน" จากใบแจ้งหนี้ได้เลย</div>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {receipts.map((rec) => (
+            <div key={rec.id} className="p-4 rounded-xl border border-gray-100 hover:border-indigo-100 transition-all">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-indigo-600 text-sm">{rec.doc_number}</span>
+                    <span className="font-semibold text-gray-900">{rec.contacts?.name || rec.description}</span>
+                  </div>
+                  <div className="text-sm text-gray-400">{rec.date}</div>
+                  {rec.ref_doc && <div className="text-xs text-gray-400">อ้างอิง: {rec.ref_doc}</div>}
+                </div>
+                <div className="text-right flex items-center gap-3">
+                  <div>
+                    <div className="font-bold text-gray-900 text-lg">฿{rec.amount?.toLocaleString('th-TH', {minimumFractionDigits: 2})}</div>
+                    <div className="text-xs text-green-500 font-medium">✓ รับเงินแล้ว</div>
+                  </div>
+                  <button onClick={() => openPrint(rec)} className="bg-indigo-600 text-white rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-indigo-700 whitespace-nowrap">
+                    📄 พิมพ์
                   </button>
                 </div>
               </div>
