@@ -1,12 +1,14 @@
 'use client'
 import { useState, useEffect } from 'react'
 import { supabase } from '../../../../lib/supabase'
+import { createJournalEntry, cancelJournalEntry } from '../../../../lib/journal'
 import { useParams } from 'next/navigation'
 
 const STEPS = [
   { id: 'so', label: 'Sales Order', icon: '🛒' },
   { id: 'invoice', label: 'ใบแจ้งหนี้/ใบกำกับภาษี', icon: '🧾' },
   { id: 'receipt', label: 'ใบเสร็จรับเงิน', icon: '💰' },
+  { id: 'journal', label: 'บันทึกบัญชี', icon: '📒' },
 ]
 
 export default function SalePage() {
@@ -35,11 +37,11 @@ export default function SalePage() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2 mb-8 bg-white rounded-2xl p-4 border border-gray-100">
+        <div className="flex items-center gap-2 mb-8 bg-white rounded-2xl p-4 border border-gray-100 overflow-x-auto">
           {STEPS.map((s, i) => (
-            <div key={s.id} className="flex items-center gap-2 flex-1">
+            <div key={s.id} className="flex items-center gap-2 flex-shrink-0">
               <button onClick={() => setActiveTab(s.id)}
-                className={`flex-1 flex items-center gap-2 px-4 py-3 rounded-xl text-sm font-semibold transition-all ${activeTab === s.id ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:bg-gray-50'}`}>
+                className={`flex items-center gap-2 px-4 py-3 rounded-xl text-sm font-semibold transition-all whitespace-nowrap ${activeTab === s.id ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:bg-gray-50'}`}>
                 <span>{s.icon}</span><span>{s.label}</span>
               </button>
               {i < STEPS.length - 1 && <span className="text-gray-300">→</span>}
@@ -48,16 +50,17 @@ export default function SalePage() {
         </div>
 
         <div className="bg-white rounded-2xl border border-gray-100 p-6">
-          {activeTab === 'so' && <SOTab companyId={id} onCreateInvoice={() => setActiveTab('invoice')} />}
+          {activeTab === 'so' && <SOTab companyId={id} company={company} onCreateInvoice={() => setActiveTab('invoice')} />}
           {activeTab === 'invoice' && <InvoiceTab companyId={id} company={company} onReceived={() => setActiveTab('receipt')} />}
           {activeTab === 'receipt' && <ReceiptTab companyId={id} company={company} />}
+          {activeTab === 'journal' && <JournalTab companyId={id} />}
         </div>
       </div>
     </div>
   )
 }
 
-function SOTab({ companyId, onCreateInvoice }) {
+function SOTab({ companyId, company, onCreateInvoice }) {
   const [orders, setOrders] = useState([])
   const [contacts, setContacts] = useState([])
   const [showForm, setShowForm] = useState(false)
@@ -122,7 +125,6 @@ function SOTab({ companyId, onCreateInvoice }) {
     if (!form.contact_id) return alert('กรุณาเลือกลูกค้า')
     if (total <= 0) return alert('กรุณากรอกรายการสินค้าและราคา')
     setSaving(true)
-
     if (editingOrder) {
       const { error } = await supabase.from('transactions').update({
         date: form.date, description: selectedContact?.name,
@@ -155,16 +157,40 @@ function SOTab({ companyId, onCreateInvoice }) {
 
   const createInvoice = async (order) => {
     const docNumber = await genDocNumber('invoice')
+    const vatEnabled = company?.vat_enabled !== false
+    const subtotal = order.amount
+    const vat = vatEnabled ? subtotal * 0.07 : 0
+    const total = subtotal + vat
+
     const { error } = await supabase.from('transactions').insert([{
       company_id: companyId, type: 'invoice',
       date: new Date().toISOString().split('T')[0],
       description: order.description, doc_number: docNumber,
-      contact_id: order.contact_id, amount: order.amount,
+      contact_id: order.contact_id, amount: total,
       category: order.category, note: order.note,
       status: 'open', ref_doc: order.doc_number, items: order.items,
     }])
+
     if (!error) {
       await supabase.from('transactions').update({ status: 'invoiced' }).eq('id', order.id)
+
+      const contactName = order.contacts?.name || order.description
+      const lines = vatEnabled ? [
+        { account_code: '1100', account_name: `ลูกหนี้การค้า (${contactName})`, debit: total, credit: 0 },
+        { account_code: '4000', account_name: 'รายได้จากการขาย', debit: 0, credit: subtotal },
+        { account_code: '2100', account_name: 'ภาษีมูลค่าเพิ่มขาย', debit: 0, credit: vat },
+      ] : [
+        { account_code: '1100', account_name: `ลูกหนี้การค้า (${contactName})`, debit: total, credit: 0 },
+        { account_code: '4000', account_name: 'รายได้จากการขาย', debit: 0, credit: total },
+      ]
+
+      await createJournalEntry({
+        companyId, refDoc: docNumber, refType: 'invoice',
+        date: new Date().toISOString().split('T')[0],
+        description: `บันทึกการขาย ตามใบแจ้งหนี้เลขที่ ${docNumber} - ${contactName}`,
+        lines,
+      })
+
       await loadOrders()
       onCreateInvoice()
       alert('สร้างใบแจ้งหนี้ ' + docNumber + ' เรียบร้อยแล้ว')
@@ -187,7 +213,7 @@ function SOTab({ companyId, onCreateInvoice }) {
   return (
     <div>
       <div className="flex justify-between items-center mb-6">
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           {[['active','เปิดอยู่'],['invoiced','ออกใบแจ้งหนี้แล้ว'],['cancelled','ยกเลิก'],['all','ทั้งหมด']].map(([k,v]) => (
             <button key={k} onClick={() => setFilter(k)}
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${filter===k ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-500 border-gray-200 hover:border-indigo-300'}`}>
@@ -318,28 +344,46 @@ function InvoiceTab({ companyId, company, onReceived }) {
     setLoading(false)
   }
 
-  const genDocNumber = async () => {
-    const year = new Date().getFullYear()
-    const { data } = await supabase.from('transactions').select('doc_number').eq('company_id', companyId).eq('type', 'receipt').like('doc_number', `REC-${year}-%`).order('doc_number', { ascending: false }).limit(1)
-    if (data && data.length > 0 && data[0].doc_number) {
-      const lastNum = parseInt(data[0].doc_number.split('-')[2]) || 0
-      return `REC-${year}-${String(lastNum + 1).padStart(4, '0')}`
-    }
-    return `REC-${year}-0001`
-  }
-
   const cancelInvoice = async (inv) => {
-    if (!confirm(`ยืนยันยกเลิก ${inv.doc_number}?\nSO ที่อ้างอิงจะกลับเป็น "เปิดอยู่" เพื่อออกใบใหม่ได้`)) return
+    if (!confirm(`ยืนยันยกเลิก ${inv.doc_number}?\nSO ที่อ้างอิงจะกลับเป็น "เปิดอยู่"`)) return
+    const vatEnabled = company?.vat_enabled !== false
+    const subtotal = vatEnabled ? inv.amount / 1.07 : inv.amount
+    const vat = vatEnabled ? inv.amount - subtotal : 0
+    const contactName = inv.contacts?.name || inv.description
+
     await supabase.from('transactions').update({ status: 'cancelled' }).eq('id', inv.id)
-    if (inv.ref_doc) {
-      await supabase.from('transactions').update({ status: 'open' }).eq('company_id', companyId).eq('doc_number', inv.ref_doc)
-    }
+    if (inv.ref_doc) await supabase.from('transactions').update({ status: 'open' }).eq('company_id', companyId).eq('doc_number', inv.ref_doc)
+
+    const lines = vatEnabled ? [
+      { account_code: '4000', account_name: 'รายได้จากการขาย', debit: subtotal, credit: 0 },
+      { account_code: '2100', account_name: 'ภาษีมูลค่าเพิ่มขาย', debit: vat, credit: 0 },
+      { account_code: '1100', account_name: `ลูกหนี้การค้า (${contactName})`, debit: 0, credit: inv.amount },
+    ] : [
+      { account_code: '4000', account_name: 'รายได้จากการขาย', debit: inv.amount, credit: 0 },
+      { account_code: '1100', account_name: `ลูกหนี้การค้า (${contactName})`, debit: 0, credit: inv.amount },
+    ]
+
+    await createJournalEntry({
+      companyId, refDoc: inv.doc_number, refType: 'cancel',
+      date: new Date().toISOString().split('T')[0],
+      description: `บันทึกยกเลิกการขาย ตามใบแจ้งหนี้เลขที่ ${inv.doc_number} (VOID) - ${contactName}`,
+      lines,
+    })
+
     await loadInvoices()
   }
 
   const receivePayment = async (inv) => {
     if (!confirm(`ยืนยันรับเงิน ฿${inv.amount?.toLocaleString('th-TH')} จาก ${inv.description}?`)) return
-    const docNumber = await genDocNumber()
+    const year = new Date().getFullYear()
+    const { data } = await supabase.from('transactions').select('doc_number').eq('company_id', companyId).eq('type', 'receipt').like('doc_number', `REC-${year}-%`).order('doc_number', { ascending: false }).limit(1)
+    let docNumber = `REC-${year}-0001`
+    if (data && data.length > 0 && data[0].doc_number) {
+      const lastNum = parseInt(data[0].doc_number.split('-')[2]) || 0
+      docNumber = `REC-${year}-${String(lastNum + 1).padStart(4, '0')}`
+    }
+
+    const contactName = inv.contacts?.name || inv.description
     const { error } = await supabase.from('transactions').insert([{
       company_id: companyId, type: 'receipt',
       date: new Date().toISOString().split('T')[0],
@@ -348,8 +392,20 @@ function InvoiceTab({ companyId, company, onReceived }) {
       category: inv.category, note: inv.note,
       status: 'paid', ref_doc: inv.doc_number, items: inv.items,
     }])
+
     if (!error) {
       await supabase.from('transactions').update({ status: 'paid' }).eq('id', inv.id)
+
+      await createJournalEntry({
+        companyId, refDoc: docNumber, refType: 'receipt',
+        date: new Date().toISOString().split('T')[0],
+        description: `บันทึกรับชำระหนี้ ตามใบเสร็จเลขที่ ${docNumber} อ้างอิง ${inv.doc_number} - ${contactName}`,
+        lines: [
+          { account_code: '1000', account_name: 'เงินสด/ธนาคาร', debit: inv.amount, credit: 0 },
+          { account_code: '1100', account_name: `ลูกหนี้การค้า (${contactName})`, debit: 0, credit: inv.amount },
+        ],
+      })
+
       await loadInvoices()
       onReceived()
       alert('บันทึกรับเงิน ' + docNumber + ' เรียบร้อยแล้ว')
@@ -376,7 +432,7 @@ function InvoiceTab({ companyId, company, onReceived }) {
   return (
     <div>
       <div className="flex justify-between items-center mb-6">
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           {[['active','รอรับเงิน'],['paid','รับเงินแล้ว'],['cancelled','ยกเลิก'],['all','ทั้งหมด']].map(([k,v]) => (
             <button key={k} onClick={() => setFilter(k)}
               className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${filter===k ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-500 border-gray-200 hover:border-indigo-300'}`}>
@@ -388,10 +444,7 @@ function InvoiceTab({ companyId, company, onReceived }) {
       </div>
 
       {filtered.length === 0 ? (
-        <div className="text-center py-12 text-gray-400">
-          <div className="text-4xl mb-2">🧾</div>
-          <div>ไม่มีรายการ</div>
-        </div>
+        <div className="text-center py-12 text-gray-400"><div className="text-4xl mb-2">🧾</div><div>ไม่มีรายการ</div></div>
       ) : (
         <div className="space-y-3">
           {filtered.map((inv) => (
@@ -449,11 +502,7 @@ function ReceiptTab({ companyId, company }) {
         <div className="text-sm text-gray-400">ออกอัตโนมัติเมื่อรับเงินแล้ว</div>
       </div>
       {receipts.length === 0 ? (
-        <div className="text-center py-12 text-gray-400">
-          <div className="text-4xl mb-2">💰</div>
-          <div>ยังไม่มีใบเสร็จ</div>
-          <div className="text-sm mt-1">กด "รับเงิน" จากใบแจ้งหนี้ได้เลย</div>
-        </div>
+        <div className="text-center py-12 text-gray-400"><div className="text-4xl mb-2">💰</div><div>ยังไม่มีใบเสร็จ</div></div>
       ) : (
         <div className="space-y-3">
           {receipts.map((rec) => (
@@ -473,6 +522,87 @@ function ReceiptTab({ companyId, company }) {
                   <button onClick={() => openPrint(rec)} className="bg-indigo-600 text-white rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-indigo-700 whitespace-nowrap">📄 พิมพ์</button>
                 </div>
               </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function JournalTab({ companyId }) {
+  const [entries, setEntries] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [dateFrom, setDateFrom] = useState(new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0])
+  const [dateTo, setDateTo] = useState(new Date().toISOString().split('T')[0])
+
+  useEffect(() => { loadEntries() }, [companyId, dateFrom, dateTo])
+
+  const loadEntries = async () => {
+    setLoading(true)
+    const { data } = await supabase.from('journal_entries').select('*, journal_lines(*)').eq('company_id', companyId).gte('date', dateFrom).lte('date', dateTo).order('date', { ascending: false })
+    setEntries(data || [])
+    setLoading(false)
+  }
+
+  if (loading) return <div className="text-center py-12 text-gray-400">กำลังโหลด...</div>
+
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-6">
+        <h2 className="font-bold text-gray-900">📒 สมุดรายวัน</h2>
+        <div className="flex items-center gap-2">
+          <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm" />
+          <span className="text-gray-400">ถึง</span>
+          <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm" />
+        </div>
+      </div>
+
+      {entries.length === 0 ? (
+        <div className="text-center py-12 text-gray-400"><div className="text-4xl mb-2">📒</div><div>ไม่มีรายการในช่วงเวลานี้</div></div>
+      ) : (
+        <div className="space-y-4">
+          {entries.map((entry) => (
+            <div key={entry.id} className="border border-gray-100 rounded-xl overflow-hidden">
+              <div className="bg-indigo-50 px-4 py-3 flex justify-between items-start">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-indigo-600 text-sm">{entry.ref_doc}</span>
+                    <span className={`text-xs px-2 py-0.5 rounded font-semibold ${entry.ref_type === 'cancel' ? 'bg-red-100 text-red-600' : entry.ref_type === 'receipt' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>
+                      {entry.ref_type === 'invoice' ? 'ขาย' : entry.ref_type === 'receipt' ? 'รับเงิน' : 'ยกเลิก'}
+                    </span>
+                  </div>
+                  <div className="text-sm text-gray-600 mt-1">{entry.description}</div>
+                </div>
+                <div className="text-sm text-gray-400">{entry.date}</div>
+              </div>
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-gray-500 border-b border-gray-100 bg-gray-50">
+                    <th className="px-4 py-2 text-left font-semibold">รหัส</th>
+                    <th className="px-4 py-2 text-left font-semibold">ชื่อบัญชี</th>
+                    <th className="px-4 py-2 text-right font-semibold">เดบิต (Dr)</th>
+                    <th className="px-4 py-2 text-right font-semibold">เครดิต (Cr)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {entry.journal_lines?.map((line, i) => (
+                    <tr key={i} className="border-b border-gray-50">
+                      <td className="px-4 py-2 text-gray-500 font-mono">{line.account_code}</td>
+                      <td className={`px-4 py-2 ${line.debit > 0 ? '' : 'pl-8 text-gray-500'}`}>{line.account_name}</td>
+                      <td className="px-4 py-2 text-right">{line.debit > 0 ? `฿${line.debit.toLocaleString('th-TH', {minimumFractionDigits: 2})}` : '-'}</td>
+                      <td className="px-4 py-2 text-right">{line.credit > 0 ? `฿${line.credit.toLocaleString('th-TH', {minimumFractionDigits: 2})}` : '-'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr className="bg-gray-50 font-bold">
+                    <td colSpan={2} className="px-4 py-2 text-gray-700">รวม</td>
+                    <td className="px-4 py-2 text-right text-indigo-600">฿{entry.journal_lines?.reduce((s, l) => s + l.debit, 0).toLocaleString('th-TH', {minimumFractionDigits: 2})}</td>
+                    <td className="px-4 py-2 text-right text-indigo-600">฿{entry.journal_lines?.reduce((s, l) => s + l.credit, 0).toLocaleString('th-TH', {minimumFractionDigits: 2})}</td>
+                  </tr>
+                </tfoot>
+              </table>
             </div>
           ))}
         </div>
