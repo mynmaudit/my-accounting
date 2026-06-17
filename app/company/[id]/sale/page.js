@@ -276,86 +276,8 @@ function InvoiceTab({ companyId, company }) {
       .then(({ data }) => { setInvoices(data || []); setLoading(false) })
   }, [companyId])
 
-  const downloadPDF = (inv) => {
+  const openPrint = (inv) => {
     window.open(`/invoice-print?id=${inv.id}`, '_blank')
-    const { default: autoTable } = await import('jspdf-autotable')
-
-    const doc = new jsPDF()
-    const contact = inv.contacts
-    const pageWidth = doc.internal.pageSize.getWidth()
-
-    // Header
-    doc.setFontSize(18)
-    doc.setFont('helvetica', 'bold')
-    doc.text('TAX INVOICE / RECEIPT', pageWidth / 2, 20, { align: 'center' })
-    doc.setFontSize(11)
-    doc.text('ใบกำกับภาษี / ใบเสร็จรับเงิน', pageWidth / 2, 27, { align: 'center' })
-
-    // Seller info
-    doc.setFontSize(10)
-    doc.setFont('helvetica', 'bold')
-    doc.text('ผู้ขาย (Seller)', 14, 40)
-    doc.setFont('helvetica', 'normal')
-    doc.text(company?.name || '', 14, 47)
-    if (company?.address) doc.text(company.address, 14, 53)
-    if (company?.tax_id) doc.text('เลขผู้เสียภาษี: ' + company.tax_id, 14, 59)
-    if (company?.phone) doc.text('โทร: ' + company.phone, 14, 65)
-
-    // Buyer info
-    doc.setFont('helvetica', 'bold')
-    doc.text('ผู้ซื้อ (Buyer)', 110, 40)
-    doc.setFont('helvetica', 'normal')
-    doc.text(contact?.name || inv.description || '', 110, 47)
-    if (contact?.address) doc.text(contact.address, 110, 53)
-    if (contact?.tax_id) doc.text('เลขผู้เสียภาษี: ' + contact.tax_id, 110, 59)
-    if (contact?.phone) doc.text('โทร: ' + contact.phone, 110, 65)
-
-    // Doc info
-    doc.setFont('helvetica', 'bold')
-    doc.text('เลขที่: ' + (inv.doc_number || ''), 110, 78)
-    doc.text('วันที่: ' + (inv.date || ''), 110, 84)
-    if (inv.ref_doc) doc.text('อ้างอิง: ' + inv.ref_doc, 110, 90)
-
-    // Items table
-    const items = inv.items ? JSON.parse(inv.items) : [{ description: inv.description, qty: 1, price: inv.amount }]
-    const subtotal = items.reduce((s, i) => s + (Number(i.qty) * Number(i.price)), 0)
-    const vat = subtotal * 0.07
-    const total = subtotal + vat
-
-    autoTable(doc, {
-      startY: 98,
-      head: [['#', 'รายละเอียด', 'จำนวน', 'ราคา/หน่วย', 'รวม']],
-      body: [
-        ...items.map((item, i) => [
-          i + 1,
-          item.description || '',
-          item.qty,
-          Number(item.price).toLocaleString('th-TH', {minimumFractionDigits: 2}),
-          (Number(item.qty) * Number(item.price)).toLocaleString('th-TH', {minimumFractionDigits: 2}),
-        ]),
-      ],
-      foot: [
-        ['', '', '', 'ราคาก่อนภาษี', subtotal.toLocaleString('th-TH', {minimumFractionDigits: 2})],
-        ['', '', '', 'ภาษีมูลค่าเพิ่ม 7%', vat.toLocaleString('th-TH', {minimumFractionDigits: 2})],
-        ['', '', '', 'รวมทั้งสิ้น', total.toLocaleString('th-TH', {minimumFractionDigits: 2})],
-      ],
-      styles: { fontSize: 9 },
-      headStyles: { fillColor: [79, 70, 229] },
-      footStyles: { fontStyle: 'bold' },
-    })
-
-    const finalY = doc.lastAutoTable.finalY + 20
-    doc.setFontSize(9)
-    doc.text('ลงชื่อผู้รับเงิน ................................', 14, finalY + 10)
-    doc.text('วันที่ ................................', 14, finalY + 18)
-    doc.text('ลงชื่อผู้จ่ายเงิน ................................', 110, finalY + 10)
-    doc.text('วันที่ ................................', 110, finalY + 18)
-
-    if (inv.note) {
-      doc.text('หมายเหตุ: ' + inv.note, 14, finalY + 30)
-    }
-
-    doc.save(`${inv.doc_number}.pdf`)
   }
 
   if (loading) return <div className="text-center py-12 text-gray-400">กำลังโหลด...</div>
@@ -391,9 +313,9 @@ function InvoiceTab({ companyId, company }) {
                     <div className="font-bold text-gray-900 text-lg">฿{inv.amount?.toLocaleString('th-TH', {minimumFractionDigits: 2})}</div>
                     <div className="text-xs text-orange-500 font-medium">● รอรับเงิน</div>
                   </div>
-                  <button onClick={() => downloadPDF(inv)}
+                  <button onClick={() => openPrint(inv)}
                     className="bg-indigo-600 text-white rounded-lg px-3 py-2 text-xs font-semibold hover:bg-indigo-700 whitespace-nowrap">
-                    📄 Download PDF
+                    📄 พิมพ์ / PDF
                   </button>
                 </div>
               </div>
