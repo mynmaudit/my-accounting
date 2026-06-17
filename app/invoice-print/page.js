@@ -27,9 +27,12 @@ function InvoicePrint() {
 
   const items = inv.items ? JSON.parse(inv.items) : [{ description: inv.description, qty: 1, price: inv.amount }]
   const subtotal = items.reduce((s, i) => s + (Number(i.qty) * Number(i.price)), 0)
-  const vat = subtotal * 0.07
+  const vatEnabled = company.vat_enabled !== false
+  const vat = vatEnabled ? subtotal * 0.07 : 0
   const total = subtotal + vat
   const contact = inv.contacts
+  const docTitle = vatEnabled ? 'ใบกำกับภาษี / ใบเสร็จรับเงิน' : 'ใบเสร็จรับเงิน'
+  const docTitleEn = vatEnabled ? 'TAX INVOICE / RECEIPT' : 'RECEIPT'
 
   return (
     <>
@@ -46,8 +49,8 @@ function InvoicePrint() {
 
       <div style={{maxWidth:794,margin:'0 auto',padding:'40px',fontSize:13}}>
         <div style={{textAlign:'center',marginBottom:24,borderBottom:'2px solid #4f46e5',paddingBottom:16}}>
-          <div style={{fontSize:22,fontWeight:700,color:'#4f46e5'}}>ใบกำกับภาษี / ใบเสร็จรับเงิน</div>
-          <div style={{fontSize:14,color:'#6b7280'}}>TAX INVOICE / RECEIPT</div>
+          <div style={{fontSize:22,fontWeight:700,color:'#4f46e5'}}>{docTitle}</div>
+          <div style={{fontSize:14,color:'#6b7280'}}>{docTitleEn}</div>
         </div>
 
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:24,marginBottom:24}}>
@@ -87,7 +90,7 @@ function InvoicePrint() {
           </thead>
           <tbody>
             {items.map((item, i) => (
-              <tr key={i} style={{borderBottom:'1px solid #e5e7eb',background: i%2===0?'#fff':'#f9fafb'}}>
+              <tr key={i} style={{borderBottom:'1px solid #e5e7eb',background:i%2===0?'#fff':'#f9fafb'}}>
                 <td style={{padding:'10px 12px'}}>{i+1}</td>
                 <td style={{padding:'10px 12px'}}>{item.description}</td>
                 <td style={{padding:'10px 12px',textAlign:'center'}}>{item.qty}</td>
@@ -100,14 +103,18 @@ function InvoicePrint() {
 
         <div style={{display:'flex',justifyContent:'flex-end',marginBottom:32}}>
           <div style={{width:280}}>
-            <div style={{display:'flex',justifyContent:'space-between',padding:'6px 0',borderBottom:'1px solid #e5e7eb'}}>
-              <span style={{color:'#6b7280'}}>ราคาก่อนภาษี</span>
-              <span>฿{subtotal.toLocaleString('th-TH',{minimumFractionDigits:2})}</span>
-            </div>
-            <div style={{display:'flex',justifyContent:'space-between',padding:'6px 0',borderBottom:'1px solid #e5e7eb'}}>
-              <span style={{color:'#6b7280'}}>ภาษีมูลค่าเพิ่ม 7%</span>
-              <span>฿{vat.toLocaleString('th-TH',{minimumFractionDigits:2})}</span>
-            </div>
+            {vatEnabled && (
+              <>
+                <div style={{display:'flex',justifyContent:'space-between',padding:'6px 0',borderBottom:'1px solid #e5e7eb'}}>
+                  <span style={{color:'#6b7280'}}>ราคาก่อนภาษี</span>
+                  <span>฿{subtotal.toLocaleString('th-TH',{minimumFractionDigits:2})}</span>
+                </div>
+                <div style={{display:'flex',justifyContent:'space-between',padding:'6px 0',borderBottom:'1px solid #e5e7eb'}}>
+                  <span style={{color:'#6b7280'}}>ภาษีมูลค่าเพิ่ม 7%</span>
+                  <span>฿{vat.toLocaleString('th-TH',{minimumFractionDigits:2})}</span>
+                </div>
+              </>
+            )}
             <div style={{display:'flex',justifyContent:'space-between',padding:'10px 0',fontWeight:700,fontSize:16,color:'#4f46e5'}}>
               <span>รวมทั้งสิ้น</span>
               <span>฿{total.toLocaleString('th-TH',{minimumFractionDigits:2})}</span>
