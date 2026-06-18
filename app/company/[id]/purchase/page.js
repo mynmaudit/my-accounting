@@ -3,10 +3,11 @@ import { useState, useEffect, useRef } from 'react'
 import { useParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { createJournalEntry } from '@/lib/journal'
+import { exportExcel } from '@/lib/excel'
 
 const today = new Date().toISOString().split('T')[0]
 const firstDay = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0]
-const emptyItem = { description: '', qty: 1, price: 0, product_id: null, unit: '' }
+const emptyItem = { description: '', qty: 1, price: 0, unit: '', supplier_code: '' }
 
 export default function PurchasePage() {
   const { id: companyId } = useParams()
@@ -14,11 +15,7 @@ export default function PurchasePage() {
   const [company, setCompany] = useState(null)
 
   useEffect(() => {
-    const init = async () => {
-      const { data } = await supabase.from('companies').select('*').eq('id', companyId).single()
-      setCompany(data)
-    }
-    init()
+    supabase.from('companies').select('*').eq('id', companyId).single().then(({ data }) => setCompany(data))
   }, [companyId])
 
   return (
@@ -27,77 +24,24 @@ export default function PurchasePage() {
         <div className="flex items-center gap-3 mb-8">
           <button onClick={() => window.location.href = `/company/${companyId}`} className="text-gray-400 hover:text-gray-600">← กลับ</button>
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">🛒 Module จัดซื้อ</h1>
+            <h1 className="text-2xl font-bold text-gray-900">📦 Module จัดซื้อ</h1>
             <p className="text-gray-400 text-sm">{company?.name}</p>
           </div>
         </div>
-
-        <div className="flex items-center gap-2 mb-8 bg-white rounded-2xl p-4 border border-gray-100">
-          {[['po','📋 Purchase Order'],['receipt','📦 รับสินค้า'],['journal','📒 บันทึกบัญชี']].map(([k,v], i, arr) => (
+        <div className="flex items-center gap-2 mb-8 bg-white rounded-2xl p-4 border border-gray-100 overflow-x-auto">
+          {[['po','📋 Purchase Order'],['receipt','📦 รับสินค้า'],['journal','📒 บันทึกบัญชี']].map(([k,v],i,arr) => (
             <div key={k} className="flex items-center gap-2 flex-shrink-0">
-              <button onClick={() => setActiveTab(k)}
-                className={`flex items-center gap-2 px-4 py-3 rounded-xl text-sm font-semibold transition-all ${activeTab === k ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:bg-gray-50'}`}>
-                {v}
-              </button>
-              {i < arr.length - 1 && <span className="text-gray-300">→</span>}
+              <button onClick={() => setActiveTab(k)} className={`px-4 py-3 rounded-xl text-sm font-semibold transition-all ${activeTab===k ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:bg-gray-50'}`}>{v}</button>
+              {i < arr.length-1 && <span className="text-gray-300">→</span>}
             </div>
           ))}
         </div>
-
         <div className="bg-white rounded-2xl border border-gray-100 p-6">
-          {activeTab === 'po' && <POTab companyId={companyId} company={company} onReceive={() => setActiveTab('receipt')} />}
-          {activeTab === 'receipt' && <ReceiptTab companyId={companyId} company={company} />}
-          {activeTab === 'journal' && <JournalTab companyId={companyId} />}
+          {activeTab==='po' && <POTab companyId={companyId} company={company} onReceive={() => setActiveTab('receipt')} />}
+          {activeTab==='receipt' && <ReceiptTab companyId={companyId} company={company} />}
+          {activeTab==='journal' && <JournalTab companyId={companyId} />}
         </div>
       </div>
-    </div>
-  )
-}
-
-function ProductSearchInput({ value, onChange, products }) {
-  const [query, setQuery] = useState(value || '')
-  const [open, setOpen] = useState(false)
-  const ref = useRef(null)
-
-  useEffect(() => { setQuery(value || '') }, [value])
-
-  useEffect(() => {
-    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false) }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [])
-
-  const filtered = products.filter(p => p.is_active && (
-    p.name.toLowerCase().includes(query.toLowerCase()) ||
-    p.code.toLowerCase().includes(query.toLowerCase())
-  )).slice(0, 8)
-
-  const handleSelect = (p) => {
-    setQuery(p.name)
-    setOpen(false)
-    onChange({ description: p.name, price: p.cost_price, product_id: p.id, unit: p.unit })
-  }
-
-  return (
-    <div ref={ref} className="relative w-full">
-      <input
-        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
-        placeholder="ค้นหาหรือพิมพ์รายละเอียด"
-        value={query}
-        onChange={e => { setQuery(e.target.value); setOpen(true) }}
-        onFocus={() => setOpen(true)}
-      />
-      {open && filtered.length > 0 && (
-        <div className="absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-52 overflow-y-auto">
-          {filtered.map(p => (
-            <button key={p.id} type="button" onMouseDown={() => handleSelect(p)}
-              className="w-full text-left px-3 py-2 hover:bg-indigo-50 text-sm flex items-center justify-between border-b border-gray-50 last:border-0">
-              <div><span className="font-medium text-gray-800">{p.name}</span><span className="ml-2 text-xs text-gray-400">{p.code}</span></div>
-              <div className="text-right"><div className="text-indigo-600 font-semibold text-xs">฿{Number(p.cost_price).toLocaleString('th-TH', {minimumFractionDigits:2})}</div><div className="text-gray-400 text-xs">{p.unit}</div></div>
-            </button>
-          ))}
-        </div>
-      )}
     </div>
   )
 }
@@ -105,7 +49,6 @@ function ProductSearchInput({ value, onChange, products }) {
 function POTab({ companyId, company, onReceive }) {
   const [orders, setOrders] = useState([])
   const [contacts, setContacts] = useState([])
-  const [products, setProducts] = useState([])
   const [showForm, setShowForm] = useState(false)
   const [editingOrder, setEditingOrder] = useState(null)
   const [expandedId, setExpandedId] = useState(null)
@@ -117,7 +60,7 @@ function POTab({ companyId, company, onReceive }) {
   const [selectedContact, setSelectedContact] = useState(null)
   const [saving, setSaving] = useState(false)
 
-  useEffect(() => { loadOrders(); loadContacts(); loadProducts() }, [companyId, dateFrom, dateTo])
+  useEffect(() => { loadOrders(); loadContacts() }, [companyId, dateFrom, dateTo])
 
   const loadOrders = async () => {
     const { data } = await supabase.from('purchase_orders').select('*, contacts(code,name)').eq('company_id', companyId).gte('date', dateFrom).lte('date', dateTo).order('date', { ascending: false })
@@ -129,33 +72,20 @@ function POTab({ companyId, company, onReceive }) {
     setContacts(data || [])
   }
 
-  const loadProducts = async () => {
-    const { data } = await supabase.from('products').select('*').eq('company_id', companyId).eq('is_active', true).order('code')
-    setProducts(data || [])
-  }
-
   const genDocNumber = async () => {
     const year = new Date().getFullYear()
     const { data } = await supabase.from('purchase_orders').select('doc_number').eq('company_id', companyId).like('doc_number', `PO-${year}-%`).order('doc_number', { ascending: false }).limit(1)
     if (data && data.length > 0) {
       const lastNum = parseInt(data[0].doc_number.split('-')[2]) || 0
-      return `PO-${year}-${String(lastNum + 1).padStart(4, '0')}`
+      return `PO-${year}-${String(lastNum+1).padStart(4,'0')}`
     }
     return `PO-${year}-0001`
   }
 
-  const total = items.reduce((s, i) => s + Number(i.qty) * Number(i.price), 0)
+  const total = items.reduce((s,i) => s + Number(i.qty)*Number(i.price), 0)
   const addItem = () => setItems([...items, { ...emptyItem }])
-  const removeItem = (i) => setItems(items.filter((_, idx) => idx !== i))
-  const updateItem = (i, k, v) => { const n = [...items]; n[i][k] = v; setItems(n) }
-  const handleSelectProduct = (i, selected) => {
-    const n = [...items]
-    n[i].description = selected.description
-    n[i].product_id = selected.product_id || null
-    n[i].unit = selected.unit || ''
-    if (selected.price !== null) n[i].price = selected.price
-    setItems(n)
-  }
+  const removeItem = (i) => setItems(items.filter((_,idx) => idx!==i))
+  const updateItem = (i,k,v) => { const n=[...items]; n[i][k]=v; setItems(n) }
 
   const cancelEdit = () => {
     setEditingOrder(null); setShowForm(false)
@@ -165,8 +95,8 @@ function POTab({ companyId, company, onReceive }) {
 
   const openEdit = (order) => {
     setEditingOrder(order)
-    setForm({ contact_id: order.contact_id, date: order.date, note: order.note || '' })
-    setSelectedContact(contacts.find(c => c.id === order.contact_id))
+    setForm({ contact_id: order.contact_id, date: order.date, note: order.note||'' })
+    setSelectedContact(contacts.find(c => c.id===order.contact_id))
     setItems(order.items ? JSON.parse(order.items) : [{ ...emptyItem }])
     setShowForm(true); setExpandedId(null)
   }
@@ -176,18 +106,10 @@ function POTab({ companyId, company, onReceive }) {
     if (total <= 0) return alert('กรุณากรอกรายการสินค้าและราคา')
     setSaving(true)
     if (editingOrder) {
-      await supabase.from('purchase_orders').update({
-        date: form.date, contact_id: form.contact_id,
-        amount: total, note: form.note, items: JSON.stringify(items),
-      }).eq('id', editingOrder.id)
+      await supabase.from('purchase_orders').update({ date: form.date, contact_id: form.contact_id, amount: total, note: form.note, items: JSON.stringify(items) }).eq('id', editingOrder.id)
     } else {
       const docNumber = await genDocNumber()
-      await supabase.from('purchase_orders').insert([{
-        company_id: companyId, doc_number: docNumber,
-        date: form.date, contact_id: form.contact_id,
-        amount: total, note: form.note, status: 'open',
-        items: JSON.stringify(items),
-      }])
+      await supabase.from('purchase_orders').insert([{ company_id: companyId, doc_number: docNumber, date: form.date, contact_id: form.contact_id, amount: total, note: form.note, status: 'open', items: JSON.stringify(items) }])
     }
     setSaving(false); await loadOrders(); cancelEdit()
   }
@@ -198,75 +120,33 @@ function POTab({ companyId, company, onReceive }) {
     await loadOrders()
   }
 
-  const receiveGoods = async (order) => {
-    const year = new Date().getFullYear()
-    const { data } = await supabase.from('purchase_receipts').select('doc_number').eq('company_id', companyId).like('doc_number', `GR-${year}-%`).order('doc_number', { ascending: false }).limit(1)
-    let docNumber = `GR-${year}-0001`
-    if (data && data.length > 0) {
-      const lastNum = parseInt(data[0].doc_number.split('-')[2]) || 0
-      docNumber = `GR-${year}-${String(lastNum + 1).padStart(4, '0')}`
-    }
-    const vatEnabled = company?.vat_enabled !== false
-    const vat = vatEnabled ? order.amount * 0.07 : 0
-    const totalAmt = order.amount + vat
-    const contactName = order.contacts?.name || ''
-    const orderItems = order.items ? JSON.parse(order.items) : []
-
-    const { error } = await supabase.from('purchase_receipts').insert([{
-      company_id: companyId, doc_number: docNumber,
-      date: today, contact_id: order.contact_id,
-      po_id: order.id, ref_doc: order.doc_number,
-      amount: totalAmt, note: order.note,
-      status: 'received', items: order.items,
-    }])
-
-    if (!error) {
-      await supabase.from('purchase_orders').update({ status: 'received' }).eq('id', order.id)
-
-      for (const item of orderItems) {
-        if (!item.product_id) continue
-        const { data: prod } = await supabase.from('products').select('stock_qty, cost_price').eq('id', item.product_id).single()
-        if (!prod) continue
-        const newQty = prod.stock_qty + Number(item.qty)
-        const newCost = ((prod.stock_qty * prod.cost_price) + (Number(item.qty) * Number(item.price))) / newQty
-        await supabase.from('products').update({ stock_qty: newQty, cost_price: newCost }).eq('id', item.product_id)
-        await supabase.from('stock_movements').insert({
-          company_id: companyId, product_id: item.product_id,
-          movement_type: 'in', ref_type: 'purchase', ref_doc: docNumber,
-          qty: Number(item.qty), cost_price: Number(item.price),
-          balance_qty: newQty, note: `รับสินค้า ${item.description}`,
-        })
-      }
-
-      const lines = vatEnabled ? [
-        { account_code: '1300', account_name: 'สินค้าคงเหลือ', debit: order.amount, credit: 0 },
-        { account_code: '2200', account_name: 'ภาษีมูลค่าเพิ่มซื้อ', debit: vat, credit: 0 },
-        { account_code: '2100', account_name: `เจ้าหนี้การค้า (${contactName})`, debit: 0, credit: totalAmt },
-      ] : [
-        { account_code: '1300', account_name: 'สินค้าคงเหลือ', debit: order.amount, credit: 0 },
-        { account_code: '2100', account_name: `เจ้าหนี้การค้า (${contactName})`, debit: 0, credit: order.amount },
-      ]
-      await createJournalEntry({
-        companyId, refDoc: docNumber, refType: 'purchase', date: today,
-        description: `บันทึกรับสินค้า ตาม ${docNumber} อ้างอิง ${order.doc_number} - ${contactName}`,
-        lines,
-      })
-      await loadOrders(); onReceive()
-      alert('รับสินค้า ' + docNumber + ' เรียบร้อยแล้ว')
-    }
+  const handleExport = () => {
+    const rows = filtered.flatMap(o => {
+      const its = o.items ? JSON.parse(o.items) : []
+      return its.map(item => ({
+        'เลขที่ PO': o.doc_number, 'วันที่': o.date,
+        'ซัพพลายเออร์': o.contacts?.name,
+        'รหัสสินค้าซัพพลายเออร์': item.supplier_code||'',
+        'รายการสินค้า': item.description, 'หน่วย': item.unit,
+        'จำนวน': item.qty, 'ราคา/หน่วย': item.price,
+        'รวม': Number(item.qty)*Number(item.price),
+        'สถานะ': o.status==='open' ? 'เปิดอยู่' : o.status==='received' ? 'รับสินค้าแล้ว' : 'ยกเลิก',
+      }))
+    })
+    exportExcel({ filename: `PO_${dateFrom}_${dateTo}`, sheets: [{ name: 'Purchase Order', data: rows }] })
   }
 
   const filtered = orders.filter(o => {
-    if (filter === 'active') return o.status === 'open'
-    if (filter === 'received') return o.status === 'received'
-    if (filter === 'cancelled') return o.status === 'cancelled'
+    if (filter==='active') return o.status==='open'
+    if (filter==='received') return o.status==='received'
+    if (filter==='cancelled') return o.status==='cancelled'
     return true
   })
 
   const statusLabel = (s) => {
-    if (s === 'open') return <span className="text-xs text-green-500 font-medium">● เปิดอยู่</span>
-    if (s === 'received') return <span className="text-xs text-gray-400 font-medium">✓ รับสินค้าแล้ว</span>
-    if (s === 'cancelled') return <span className="text-xs text-red-400 font-medium">✕ ยกเลิกแล้ว</span>
+    if (s==='open') return <span className="text-xs text-green-500 font-medium">● เปิดอยู่</span>
+    if (s==='received') return <span className="text-xs text-gray-400 font-medium">✓ รับสินค้าแล้ว</span>
+    if (s==='cancelled') return <span className="text-xs text-red-400 font-medium">✕ ยกเลิกแล้ว</span>
   }
 
   return (
@@ -274,18 +154,16 @@ function POTab({ companyId, company, onReceive }) {
       <div className="flex justify-between items-center mb-4 flex-wrap gap-3">
         <div className="flex gap-2 flex-wrap">
           {[['active','เปิดอยู่'],['received','รับสินค้าแล้ว'],['cancelled','ยกเลิก'],['all','ทั้งหมด']].map(([k,v]) => (
-            <button key={k} onClick={() => setFilter(k)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${filter===k ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-500 border-gray-200'}`}>
-              {v}
-            </button>
+            <button key={k} onClick={() => setFilter(k)} className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${filter===k ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-500 border-gray-200'}`}>{v}</button>
           ))}
         </div>
-        <button onClick={() => { setEditingOrder(null); setShowForm(!showForm) }} className="bg-indigo-600 text-white rounded-lg px-4 py-2 text-sm font-semibold hover:bg-indigo-700">
-          + สร้าง PO ใหม่
-        </button>
+        <div className="flex gap-2">
+          <button onClick={handleExport} className="bg-green-600 text-white rounded-lg px-3 py-2 text-sm font-semibold hover:bg-green-700">📊 Excel</button>
+          <button onClick={() => { setEditingOrder(null); setShowForm(!showForm) }} className="bg-indigo-600 text-white rounded-lg px-4 py-2 text-sm font-semibold hover:bg-indigo-700">+ สร้าง PO</button>
+        </div>
       </div>
 
-      <div className="flex items-center gap-2 mb-4 flex-wrap">
+      <div className="flex items-center gap-2 mb-4">
         <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm" />
         <span className="text-gray-400">ถึง</span>
         <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm" />
@@ -297,8 +175,7 @@ function POTab({ companyId, company, onReceive }) {
           <div className="grid grid-cols-2 gap-4 mb-4">
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-1">ซัพพลายเออร์ *</label>
-              <select value={form.contact_id} onChange={e => { setForm({...form, contact_id: e.target.value}); setSelectedContact(contacts.find(c => c.id === e.target.value)) }}
-                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white">
+              <select value={form.contact_id} onChange={e => { setForm({...form, contact_id: e.target.value}); setSelectedContact(contacts.find(c => c.id===e.target.value)) }} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white">
                 <option value="">-- เลือกซัพพลายเออร์ --</option>
                 {contacts.map(c => <option key={c.id} value={c.id}>{c.code} — {c.name}</option>)}
               </select>
@@ -312,7 +189,6 @@ function POTab({ companyId, company, onReceive }) {
             <div className="bg-indigo-50 rounded-lg p-3 mb-4 text-sm">
               <div className="font-semibold text-indigo-900">{selectedContact.name}</div>
               {selectedContact.tax_id && <div className="text-indigo-600">Tax ID: {selectedContact.tax_id}</div>}
-              {selectedContact.address && <div className="text-indigo-600">{selectedContact.address}</div>}
             </div>
           )}
           <div className="mb-4">
@@ -323,19 +199,21 @@ function POTab({ companyId, company, onReceive }) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-gray-500 border-b border-gray-200">
-                  <th className="pb-2 font-semibold" style={{width:'45%'}}>สินค้า</th>
+                  <th className="pb-2 font-semibold" style={{width:'20%'}}>รหัสซัพพลายเออร์</th>
+                  <th className="pb-2 font-semibold" style={{width:'30%'}}>รายละเอียด</th>
                   <th className="pb-2 font-semibold text-center" style={{width:'10%'}}>หน่วย</th>
-                  <th className="pb-2 font-semibold text-center" style={{width:'15%'}}>จำนวน</th>
-                  <th className="pb-2 font-semibold text-right" style={{width:'20%'}}>ราคา/หน่วย</th>
+                  <th className="pb-2 font-semibold text-center" style={{width:'12%'}}>จำนวน</th>
+                  <th className="pb-2 font-semibold text-right" style={{width:'18%'}}>ราคา/หน่วย</th>
                   <th className="pb-2 font-semibold text-right" style={{width:'10%'}}>รวม</th>
                   <th style={{width:'32px'}}></th>
                 </tr>
               </thead>
               <tbody>
-                {items.map((item, i) => (
+                {items.map((item,i) => (
                   <tr key={i} className="border-b border-gray-100 align-top">
-                    <td className="py-2 pr-2"><ProductSearchInput value={item.description} products={products} onChange={s => handleSelectProduct(i, s)} />{item.product_id && <div className="text-xs text-indigo-400 mt-0.5 pl-1">📦 เชื่อมสินค้าแล้ว</div>}</td>
-                    <td className="py-2 px-1"><input className="w-full border border-gray-200 rounded-lg px-2 py-2 text-sm text-center" value={item.unit||''} onChange={e => updateItem(i,'unit',e.target.value)} placeholder="หน่วย" /></td>
+                    <td className="py-2 pr-2"><input className="w-full border border-gray-200 rounded-lg px-2 py-2 text-sm" placeholder="รหัสสินค้าของซัพพลายเออร์" value={item.supplier_code||''} onChange={e => updateItem(i,'supplier_code',e.target.value)} /></td>
+                    <td className="py-2 pr-2"><input className="w-full border border-gray-200 rounded-lg px-2 py-2 text-sm" placeholder="ชื่อสินค้า/บริการ" value={item.description} onChange={e => updateItem(i,'description',e.target.value)} /></td>
+                    <td className="py-2 px-1"><input className="w-full border border-gray-200 rounded-lg px-2 py-2 text-sm text-center" placeholder="หน่วย" value={item.unit||''} onChange={e => updateItem(i,'unit',e.target.value)} /></td>
                     <td className="py-2 px-1"><input type="number" min="1" step="any" className="w-full border border-gray-200 rounded-lg px-2 py-2 text-sm text-center" value={item.qty} onChange={e => updateItem(i,'qty',e.target.value)} /></td>
                     <td className="py-2 pl-1"><input type="number" min="0" step="0.01" className="w-full border border-gray-200 rounded-lg px-2 py-2 text-sm text-right" value={item.price} onChange={e => updateItem(i,'price',e.target.value)} /></td>
                     <td className="py-2 pl-2 text-right text-gray-700 font-medium whitespace-nowrap">{(Number(item.qty)*Number(item.price)).toLocaleString('th-TH',{minimumFractionDigits:2})}</td>
@@ -380,6 +258,7 @@ function POTab({ companyId, company, onReceive }) {
                   <div className="font-bold text-gray-900">฿{o.amount?.toLocaleString('th-TH',{minimumFractionDigits:2})}</div>
                   {o.status==='open' && (
                     <div className="flex flex-col gap-1">
+                      <button onClick={() => window.open(`/purchase-print?id=${o.id}`,'_blank')} className="bg-indigo-600 text-white rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-indigo-700 whitespace-nowrap">📄 พิมพ์</button>
                       <button onClick={() => receiveGoods(o)} className="bg-green-500 text-white rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-green-600 whitespace-nowrap">📦 รับสินค้า</button>
                       <button onClick={() => openEdit(o)} className="bg-indigo-100 text-indigo-700 rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-indigo-200 whitespace-nowrap">✏️ แก้ไข</button>
                       <button onClick={() => cancelOrder(o)} className="bg-red-100 text-red-600 rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-red-200 whitespace-nowrap">✕ ยกเลิก</button>
@@ -390,8 +269,8 @@ function POTab({ companyId, company, onReceive }) {
               {expandedId===o.id && o.items && (
                 <div className="px-4 pb-4 border-t border-gray-100">
                   <table className="w-full text-sm mt-3">
-                    <thead><tr className="text-gray-500 border-b border-gray-100"><th className="text-left pb-2">รายการ</th><th className="text-center pb-2">จำนวน</th><th className="text-right pb-2">ราคา/หน่วย</th><th className="text-right pb-2">รวม</th></tr></thead>
-                    <tbody>{JSON.parse(o.items).map((item,i) => <tr key={i} className="border-b border-gray-50"><td className="py-2">{item.description}</td><td className="py-2 text-center">{item.qty} {item.unit}</td><td className="py-2 text-right">{Number(item.price).toLocaleString('th-TH',{minimumFractionDigits:2})}</td><td className="py-2 text-right font-medium">{(Number(item.qty)*Number(item.price)).toLocaleString('th-TH',{minimumFractionDigits:2})}</td></tr>)}</tbody>
+                    <thead><tr className="text-gray-500 border-b border-gray-100"><th className="text-left pb-2">รหัสซัพพลายเออร์</th><th className="text-left pb-2">รายการ</th><th className="text-center pb-2">จำนวน</th><th className="text-right pb-2">ราคา/หน่วย</th><th className="text-right pb-2">รวม</th></tr></thead>
+                    <tbody>{JSON.parse(o.items).map((item,i) => <tr key={i} className="border-b border-gray-50"><td className="py-2 text-gray-400 font-mono text-xs">{item.supplier_code||'-'}</td><td className="py-2">{item.description}</td><td className="py-2 text-center">{item.qty} {item.unit}</td><td className="py-2 text-right">{Number(item.price).toLocaleString('th-TH',{minimumFractionDigits:2})}</td><td className="py-2 text-right font-medium">{(Number(item.qty)*Number(item.price)).toLocaleString('th-TH',{minimumFractionDigits:2})}</td></tr>)}</tbody>
                   </table>
                 </div>
               )}
@@ -403,13 +282,17 @@ function POTab({ companyId, company, onReceive }) {
   )
 }
 
-function ReceiptTab({ companyId }) {
+function ReceiptTab({ companyId, company }) {
   const [receipts, setReceipts] = useState([])
+  const [products, setProducts] = useState([])
   const [loading, setLoading] = useState(true)
   const [dateFrom, setDateFrom] = useState(firstDay)
   const [dateTo, setDateTo] = useState(today)
+  const [matchModal, setMatchModal] = useState(null) // { receipt, itemIndex }
+  const [matchProductId, setMatchProductId] = useState('')
+  const [matchSaving, setMatchSaving] = useState(false)
 
-  useEffect(() => { loadReceipts() }, [companyId, dateFrom, dateTo])
+  useEffect(() => { loadReceipts(); loadProducts() }, [companyId, dateFrom, dateTo])
 
   const loadReceipts = async () => {
     setLoading(true)
@@ -418,38 +301,162 @@ function ReceiptTab({ companyId }) {
     setLoading(false)
   }
 
+  const loadProducts = async () => {
+    const { data } = await supabase.from('products').select('*').eq('company_id', companyId).eq('is_active', true).order('code')
+    setProducts(data || [])
+  }
+
+  const handleMatch = async () => {
+    if (!matchProductId) return alert('กรุณาเลือกสินค้า')
+    setMatchSaving(true)
+    const { receipt, itemIndex } = matchModal
+    const items = JSON.parse(receipt.items)
+    const item = items[itemIndex]
+    const prod = products.find(p => p.id === matchProductId)
+    if (!prod) return
+
+    // อัปเดต product_id ใน items
+    items[itemIndex].product_id = matchProductId
+    await supabase.from('purchase_receipts').update({ items: JSON.stringify(items) }).eq('id', receipt.id)
+
+    // อัปเดตสต็อก + weighted average cost
+    const newQty = prod.stock_qty + Number(item.qty)
+    const newCost = ((prod.stock_qty * prod.cost_price) + (Number(item.qty) * Number(item.price))) / newQty
+    await supabase.from('products').update({ stock_qty: newQty, cost_price: newCost }).eq('id', matchProductId)
+
+    // บันทึก movement
+    await supabase.from('stock_movements').insert({
+      company_id: companyId, product_id: matchProductId,
+      movement_type: 'in', ref_type: 'purchase', ref_doc: receipt.doc_number,
+      qty: Number(item.qty), cost_price: Number(item.price),
+      balance_qty: newQty, note: `รับสินค้า ${item.description}`,
+    })
+
+    setMatchSaving(false)
+    setMatchModal(null)
+    setMatchProductId('')
+    await loadReceipts()
+    alert('จับคู่สินค้าเรียบร้อยแล้ว')
+  }
+
+  const handleExport = () => {
+    const rows = receipts.flatMap(r => {
+      const its = r.items ? JSON.parse(r.items) : []
+      return its.map(item => ({
+        'เลขที่ GR': r.doc_number, 'วันที่': r.date,
+        'ซัพพลายเออร์': r.contacts?.name,
+        'อ้างอิง PO': r.ref_doc||'',
+        'รหัสซัพพลายเออร์': item.supplier_code||'',
+        'รายการสินค้า': item.description,
+        'หน่วย': item.unit||'',
+        'จำนวน': item.qty,
+        'ราคา/หน่วย': item.price,
+        'รวม': Number(item.qty)*Number(item.price),
+        'จับคู่สินค้าแล้ว': item.product_id ? 'แล้ว' : 'ยังไม่ได้',
+      }))
+    })
+    exportExcel({ filename: `GR_${dateFrom}_${dateTo}`, sheets: [{ name: 'รับสินค้า', data: rows }] })
+  }
+
   if (loading) return <div className="text-center py-12 text-gray-400">กำลังโหลด...</div>
 
   return (
     <div>
       <div className="flex justify-between items-center mb-4 flex-wrap gap-3">
         <h2 className="font-bold text-gray-900">📦 รายการรับสินค้า</h2>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm" />
           <span className="text-gray-400">ถึง</span>
           <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm" />
+          <button onClick={handleExport} className="bg-green-600 text-white rounded-lg px-3 py-1.5 text-sm font-semibold hover:bg-green-700">📊 Excel</button>
         </div>
       </div>
+
       {receipts.length === 0 ? (
         <div className="text-center py-12 text-gray-400"><div className="text-4xl mb-2">📦</div><div>ไม่มีรายการ</div></div>
       ) : (
-        <div className="space-y-3">
-          {receipts.map(r => (
-            <div key={r.id} className="p-4 rounded-xl border border-gray-100 hover:border-indigo-100 transition-all">
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="font-bold text-indigo-600 text-sm">{r.doc_number}</span>
-                    <span className="font-semibold text-gray-900">{r.contacts?.name}</span>
+        <div className="space-y-4">
+          {receipts.map(r => {
+            const items = r.items ? JSON.parse(r.items) : []
+            return (
+              <div key={r.id} className="border border-gray-100 rounded-xl overflow-hidden">
+                <div className="bg-gray-50 px-4 py-3 flex justify-between items-center">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-indigo-600">{r.doc_number}</span>
+                      <span className="font-semibold text-gray-900">{r.contacts?.name}</span>
+                    </div>
+                    <div className="text-sm text-gray-400">{r.date} {r.ref_doc && `· อ้างอิง PO: ${r.ref_doc}`}</div>
                   </div>
-                  <div className="text-sm text-gray-400">{r.date}</div>
-                  {r.ref_doc && <div className="text-xs text-gray-400">อ้างอิง PO: {r.ref_doc}</div>}
-                  <span className="text-xs text-green-500 font-medium">✓ รับสินค้าแล้ว</span>
+                  <div className="flex items-center gap-2">
+                    <div className="font-bold text-gray-900">฿{r.amount?.toLocaleString('th-TH',{minimumFractionDigits:2})}</div>
+                    <button onClick={() => window.open(`/purchase-print?id=${r.id}`,'_blank')} className="bg-indigo-600 text-white rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-indigo-700">📄 พิมพ์</button>
+                  </div>
                 </div>
-                <div className="font-bold text-gray-900 text-lg">฿{r.amount?.toLocaleString('th-TH',{minimumFractionDigits:2})}</div>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-100 bg-white text-gray-500">
+                      <th className="px-4 py-2 text-left">รหัสซัพพลายเออร์</th>
+                      <th className="px-4 py-2 text-left">รายการ</th>
+                      <th className="px-4 py-2 text-center">จำนวน</th>
+                      <th className="px-4 py-2 text-right">ราคา/หน่วย</th>
+                      <th className="px-4 py-2 text-center">สินค้าในระบบ</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map((item,i) => (
+                      <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
+                        <td className="px-4 py-2 font-mono text-xs text-gray-400">{item.supplier_code||'-'}</td>
+                        <td className="px-4 py-2">{item.description}</td>
+                        <td className="px-4 py-2 text-center">{item.qty} {item.unit}</td>
+                        <td className="px-4 py-2 text-right">{Number(item.price).toLocaleString('th-TH',{minimumFractionDigits:2})}</td>
+                        <td className="px-4 py-2 text-center">
+                          {item.product_id ? (
+                            <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full font-medium">✓ จับคู่แล้ว</span>
+                          ) : (
+                            <button onClick={() => { setMatchModal({ receipt: r, itemIndex: i }); setMatchProductId('') }}
+                              className="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full font-medium hover:bg-yellow-200">
+                              จับคู่สินค้า
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {matchModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+              <h2 className="font-semibold text-gray-800">จับคู่สินค้า</h2>
+              <button onClick={() => setMatchModal(null)} className="text-gray-400 hover:text-gray-600 text-2xl">×</button>
+            </div>
+            <div className="px-6 py-5 space-y-4">
+              <div className="bg-gray-50 rounded-lg px-4 py-3 text-sm">
+                <div className="text-gray-500">สินค้าที่รับ:</div>
+                <div className="font-semibold text-gray-800">{JSON.parse(matchModal.receipt.items)[matchModal.itemIndex].description}</div>
+                <div className="text-gray-400 text-xs">รหัสซัพพลายเออร์: {JSON.parse(matchModal.receipt.items)[matchModal.itemIndex].supplier_code||'-'}</div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-600 mb-1">เลือกสินค้าในระบบ</label>
+                <select className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" value={matchProductId} onChange={e => setMatchProductId(e.target.value)}>
+                  <option value="">-- เลือกสินค้า --</option>
+                  {products.map(p => <option key={p.id} value={p.id}>{p.code} — {p.name} (คงเหลือ: {p.stock_qty} {p.unit})</option>)}
+                </select>
+              </div>
+              <p className="text-xs text-gray-400">* เมื่อจับคู่แล้ว สต็อกจะเพิ่มและต้นทุนถัวเฉลี่ยจะอัปเดตอัตโนมัติ</p>
+              <div className="flex justify-end gap-3 pt-2">
+                <button onClick={() => setMatchModal(null)} className="px-4 py-2 rounded-lg border border-gray-300 text-sm text-gray-600">ยกเลิก</button>
+                <button onClick={handleMatch} disabled={matchSaving||!matchProductId} className="px-5 py-2 rounded-lg bg-indigo-600 text-white text-sm font-semibold disabled:opacity-50">{matchSaving ? 'กำลังบันทึก...' : 'ยืนยันจับคู่'}</button>
               </div>
             </div>
-          ))}
+          </div>
         </div>
       )}
     </div>
@@ -471,16 +478,29 @@ function JournalTab({ companyId }) {
     setLoading(false)
   }
 
+  const handleExport = () => {
+    const rows = entries.flatMap(entry =>
+      entry.journal_lines?.map(line => ({
+        'วันที่': entry.date, 'เลขที่เอกสาร': entry.ref_doc,
+        'คำอธิบาย': entry.description,
+        'รหัสบัญชี': line.account_code, 'ชื่อบัญชี': line.account_name,
+        'เดบิต (Dr)': line.debit||'', 'เครดิต (Cr)': line.credit||'',
+      })) || []
+    )
+    exportExcel({ filename: `Journal_Purchase_${dateFrom}_${dateTo}`, sheets: [{ name: 'สมุดรายวันจัดซื้อ', data: rows }] })
+  }
+
   if (loading) return <div className="text-center py-12 text-gray-400">กำลังโหลด...</div>
 
   return (
     <div>
       <div className="flex justify-between items-center mb-6 flex-wrap gap-3">
         <h2 className="font-bold text-gray-900">📒 สมุดรายวันจัดซื้อ</h2>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm" />
           <span className="text-gray-400">ถึง</span>
           <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm" />
+          <button onClick={handleExport} className="bg-green-600 text-white rounded-lg px-3 py-1.5 text-sm font-semibold hover:bg-green-700">📊 Excel</button>
         </div>
       </div>
       {entries.length === 0 ? (
@@ -509,12 +529,12 @@ function JournalTab({ companyId }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {entry.journal_lines?.map((line, i) => (
+                  {entry.journal_lines?.map((line,i) => (
                     <tr key={i} className="border-b border-gray-50">
                       <td className="px-4 py-2 text-gray-500 font-mono">{line.account_code}</td>
-                      <td className={`px-4 py-2 ${line.debit > 0 ? '' : 'pl-8 text-gray-500'}`}>{line.account_name}</td>
-                      <td className="px-4 py-2 text-right">{line.debit > 0 ? `฿${line.debit.toLocaleString('th-TH',{minimumFractionDigits:2})}` : '-'}</td>
-                      <td className="px-4 py-2 text-right">{line.credit > 0 ? `฿${line.credit.toLocaleString('th-TH',{minimumFractionDigits:2})}` : '-'}</td>
+                      <td className={`px-4 py-2 ${line.debit>0 ? '' : 'pl-8 text-gray-500'}`}>{line.account_name}</td>
+                      <td className="px-4 py-2 text-right">{line.debit>0 ? `฿${line.debit.toLocaleString('th-TH',{minimumFractionDigits:2})}` : '-'}</td>
+                      <td className="px-4 py-2 text-right">{line.credit>0 ? `฿${line.credit.toLocaleString('th-TH',{minimumFractionDigits:2})}` : '-'}</td>
                     </tr>
                   ))}
                 </tbody>
