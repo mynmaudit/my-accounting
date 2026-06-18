@@ -1,5 +1,6 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
+import React from 'react'
 import { supabase } from '../../../../lib/supabase'
 import { createJournalEntry } from '../../../../lib/journal'
 import { exportExcel } from '../../../../lib/excel'
@@ -80,6 +81,52 @@ function DateFilter({ dateFrom, dateTo, setDateFrom, setDateTo, onExport }) {
   )
 }
 
+function ProductSearchInput({ value, onChange, products }) {
+  const [query, setQuery] = React.useState(value || '')
+  const [open, setOpen] = React.useState(false)
+  const ref = React.useRef(null)
+
+  React.useEffect(() => { setQuery(value || '') }, [value])
+  React.useEffect(() => {
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
+  const filtered = products.filter(p =>
+    p.name.toLowerCase().includes(query.toLowerCase()) ||
+    p.code.toLowerCase().includes(query.toLowerCase())
+  ).slice(0, 8)
+
+  const handleSelect = (p) => {
+    setQuery(p.name)
+    setOpen(false)
+    onChange({ description: p.name, price: p.sale_price, product_id: p.id, unit: p.unit })
+  }
+
+  return (
+    <div ref={ref} className='relative w-full'>
+      <input
+        className='w-full border border-gray-200 rounded-lg px-3 py-2'
+        placeholder='ค้นหาหรือพิมพ์รายละเอียด'
+        value={query}
+        onChange={e => { setQuery(e.target.value); setOpen(true) }}
+        onFocus={() => setOpen(true)}
+      />
+      {open && filtered.length > 0 && (
+        <div className='absolute z-50 top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg max-h-52 overflow-y-auto'>
+          {filtered.map(p => (
+            <button key={p.id} type='button' onMouseDown={() => handleSelect(p)}
+              className='w-full text-left px-3 py-2 hover:bg-indigo-50 text-sm flex items-center justify-between border-b border-gray-50 last:border-0'>
+              <div><span className='font-medium text-gray-800'>{p.name}</span><span className='ml-2 text-xs text-gray-400'>{p.code}</span></div>
+              <div className='text-right'><div className='text-indigo-600 font-semibold text-xs'>฿{Number(p.sale_price).toLocaleString('th-TH',{minimumFractionDigits:2})}</div><div className='text-gray-400 text-xs'>{p.unit}</div></div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function SOTab({ companyId, company, onCreateInvoice }) {
   const [orders, setOrders] = useState([])
   const [contacts, setContacts] = useState([])
@@ -91,10 +138,11 @@ function SOTab({ companyId, company, onCreateInvoice }) {
   const [dateTo, setDateTo] = useState(today)
   const [selectedContact, setSelectedContact] = useState(null)
   const [form, setForm] = useState({ contact_id: '', date: today, note: '' })
-  const [items, setItems] = useState([{ description: '', qty: 1, price: 0 }])
+  const [items, setItems] = useState([{ description: '', qty: 1, price: 0, product_id: null, unit: '' }])
+  const [products, setProducts] = useState([])
   const [saving, setSaving] = useState(false)
 
-  useEffect(() => { loadOrders(); loadContacts() }, [companyId, dateFrom, dateTo])
+  useEffect(() => { loadOrders(); loadContacts(); loadProducts() }, [companyId, dateFrom, dateTo])
 
   const loadOrders = async () => {
     const { data } = await supabase.from('transactions').select('*, contacts(code, name)').eq('company_id', companyId).eq('type', 'so').gte('date', dateFrom).lte('date', dateTo).order('date', { ascending: false })
@@ -104,6 +152,11 @@ function SOTab({ companyId, company, onCreateInvoice }) {
   const loadContacts = async () => {
     const { data } = await supabase.from('contacts').select('*').eq('company_id', companyId).in('contact_type', ['customer', 'both']).order('code')
     setContacts(data || [])
+  }
+
+  const loadProducts = async () => {
+    const { data } = await supabase.from('products').select('*').eq('company_id', companyId).eq('is_active', true).order('code')
+    setProducts(data || [])
   }
 
   const genDocNumber = async (type) => {
@@ -118,7 +171,7 @@ function SOTab({ companyId, company, onCreateInvoice }) {
     return `${prefix}-${year}-0001`
   }
 
-  const addItem = () => setItems([...items, { description: '', qty: 1, price: 0 }])
+  const addItem = () => setItems([...items, { description: '', qty: 1, price: 0, product_id: null, unit: '' }])
   const removeItem = (i) => setItems(items.filter((_, idx) => idx !== i))
   const updateItem = (i, k, v) => { const n = [...items]; n[i][k] = v; setItems(n) }
   const total = items.reduce((s, i) => s + (Number(i.qty) * Number(i.price)), 0)
@@ -132,7 +185,7 @@ function SOTab({ companyId, company, onCreateInvoice }) {
     setEditingOrder(order)
     setForm({ contact_id: order.contact_id, date: order.date, note: order.note || '' })
     setSelectedContact(contacts.find(c => c.id === order.contact_id))
-    setItems(order.items ? JSON.parse(order.items) : [{ description: '', qty: 1, price: 0 }])
+    setItems(order.items ? JSON.parse(order.items) : [{ description: '', qty: 1, price: 0, product_id: null, unit: '' }])
     setShowForm(true)
     setExpandedId(null)
   }
@@ -141,7 +194,7 @@ function SOTab({ companyId, company, onCreateInvoice }) {
     setEditingOrder(null)
     setShowForm(false)
     setForm({ contact_id: '', date: today, note: '' })
-    setItems([{ description: '', qty: 1, price: 0 }])
+    setItems([{ description: '', qty: 1, price: 0, product_id: null, unit: '' }])
     setSelectedContact(null)
   }
 
@@ -195,6 +248,20 @@ function SOTab({ companyId, company, onCreateInvoice }) {
     if (!error) {
       await supabase.from('transactions').update({ status: 'invoiced' }).eq('id', order.id)
       const contactName = order.contacts?.name || order.description
+
+      // ตัดสต็อกอัตโนมัติ
+      const orderItems = order.items ? JSON.parse(order.items) : []
+      for (const item of orderItems) {
+        const { data: prod } = await supabase.from('products').select('stock_qty, cost_price').eq('id', item.product_id).single()
+        const newQty = prod.stock_qty - Number(item.qty)
+        await supabase.from('products').update({ stock_qty: newQty }).eq('id', item.product_id)
+        await supabase.from('stock_movements').insert({
+          company_id: companyId, product_id: item.product_id,
+          movement_type: 'out', ref_type: 'invoice', ref_doc: docNumber,
+          qty: -Number(item.qty), cost_price: prod.cost_price,
+          balance_qty: newQty, note: 'ขาย ' + item.description,
+        })
+      }
       const lines = vatEnabled ? [
         { account_code: '1100', account_name: `ลูกหนี้การค้า (${contactName})`, debit: totalAmt, credit: 0 },
         { account_code: '4000', account_name: 'รายได้จากการขาย', debit: 0, credit: subtotal },
@@ -298,18 +365,25 @@ function SOTab({ companyId, company, onCreateInvoice }) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-gray-500 border-b border-gray-200">
-                  <th className="pb-2 font-semibold w-1/2">รายละเอียด</th>
-                  <th className="pb-2 font-semibold text-center w-1/6">จำนวน (ชิ้น)</th>
-                  <th className="pb-2 font-semibold text-right w-1/4">ราคา/หน่วย (บาท)</th>
+                  <th className="pb-2 font-semibold" style={{width:'40%'}}>สินค้า/บริการ</th>
+                  <th className="pb-2 font-semibold text-center" style={{width:'10%'}}>หน่วย</th>
+                  <th className="pb-2 font-semibold text-center" style={{width:'15%'}}>จำนวน</th>
+                  <th className="pb-2 font-semibold text-right" style={{width:'20%'}}>ราคา/หน่วย</th>
+                  <th className="pb-2 font-semibold text-right" style={{width:'10%'}}>รวม</th>
                   <th className="pb-2 w-8"></th>
                 </tr>
               </thead>
               <tbody>
                 {items.map((item, i) => (
                   <tr key={i} className="border-b border-gray-100">
-                    <td className="py-2 pr-2"><input className="w-full border border-gray-200 rounded-lg px-3 py-2" placeholder="รายละเอียด" value={item.description} onChange={(e) => updateItem(i, 'description', e.target.value)} /></td>
-                    <td className="py-2 px-2"><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-center" type="number" min="1" value={item.qty} onChange={(e) => updateItem(i, 'qty', e.target.value)} /></td>
-                    <td className="py-2 pl-2"><input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-right" type="number" min="0" value={item.price} onChange={(e) => updateItem(i, 'price', e.target.value)} /></td>
+                    <td className="py-2 pr-2">
+                      <ProductSearchInput value={item.description} products={products} onChange={s => { const n=[...items]; n[i].description=s.description; n[i].product_id=s.product_id||null; n[i].unit=s.unit||n[i].unit; if(s.price!==null) n[i].price=s.price; setItems(n) }} />
+                      {item.product_id && <div className="text-xs text-indigo-400 mt-0.5 pl-1">📦 เชื่อมสินค้าแล้ว</div>}
+                    </td>
+                    <td className="py-2 px-1"><input className="w-full border border-gray-200 rounded-lg px-2 py-2 text-sm text-center" placeholder="หน่วย" value={item.unit||''} onChange={e => updateItem(i,'unit',e.target.value)} /></td>
+                    <td className="py-2 px-1"><input className="w-full border border-gray-200 rounded-lg px-2 py-2 text-sm text-center" type="number" min="1" step="any" value={item.qty} onChange={e => updateItem(i,'qty',e.target.value)} /></td>
+                    <td className="py-2 pl-1"><input className="w-full border border-gray-200 rounded-lg px-2 py-2 text-sm text-right" type="number" min="0" step="0.01" value={item.price} onChange={e => updateItem(i,'price',e.target.value)} /></td>
+                    <td className="py-2 pl-2 text-right text-gray-700 font-medium whitespace-nowrap text-sm">{(Number(item.qty)*Number(item.price)).toLocaleString('th-TH',{minimumFractionDigits:2})}</td>
                     <td className="py-2 pl-2 text-center"><button onClick={() => removeItem(i)} className="text-gray-300 hover:text-red-400 text-xl">×</button></td>
                   </tr>
                 ))}
@@ -398,6 +472,19 @@ function InvoiceTab({ companyId, company, onReceived }) {
     const vat = vatEnabled ? inv.amount - subtotal : 0
     const contactName = inv.contacts?.name || inv.description
     await supabase.from('transactions').update({ status: 'cancelled' }).eq('id', inv.id)
+
+    const invItems = inv.items ? JSON.parse(inv.items) : []
+    for (const item of invItems) {
+      const { data: prod } = await supabase.from('products').select('stock_qty, cost_price').eq('id', item.product_id).single()
+      const newQty = prod.stock_qty + Number(item.qty)
+      await supabase.from('products').update({ stock_qty: newQty }).eq('id', item.product_id)
+      await supabase.from('stock_movements').insert({
+        company_id: companyId, product_id: item.product_id,
+        movement_type: 'in', ref_type: 'invoice', ref_doc: inv.doc_number,
+        qty: Number(item.qty), cost_price: prod.cost_price,
+        balance_qty: newQty, note: 'คืนสต็อกอัตโนมัติ ยกเลิก ' + inv.doc_number,
+      })
+    }
     if (inv.ref_doc) await supabase.from('transactions').update({ status: 'open' }).eq('company_id', companyId).eq('doc_number', inv.ref_doc)
     const lines = vatEnabled ? [
       { account_code: '4000', account_name: 'รายได้จากการขาย', debit: subtotal, credit: 0 },
