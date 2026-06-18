@@ -106,7 +106,7 @@ export default function InventoryPage() {
   const lowStockCount = products.filter(p => p.is_active && p.stock_qty <= p.min_qty && p.min_qty > 0).length
 
   return (
-    <div className="p-6 max-w-7xl mx-auto"><div className="mb-4"><button onClick={() => window.history.back()} className="text-gray-400 hover:text-gray-600 text-sm">← กลับ</button></div><div className="mb-4"><button onClick={() => window.history.back()} className="text-gray-400 hover:text-gray-600 text-sm">← กลับ</button></div>
+    <div className="p-6 max-w-7xl mx-auto"><div className="mb-4"><button onClick={() => window.history.back()} className="text-gray-400 hover:text-gray-600 text-sm">← กลับ</button></div>
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-gray-800">คลังสินค้า</h1>
