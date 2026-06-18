@@ -29,7 +29,7 @@ export default function PurchasePage() {
           </div>
         </div>
         <div className="flex items-center gap-2 mb-8 bg-white rounded-2xl p-4 border border-gray-100 overflow-x-auto">
-          {[['po','📋 Purchase Order'],['receipt','📦 รับสินค้า'],['journal','📒 บันทึกบัญชี']].map(([k,v],i,arr) => (
+          {[['po','📋 Purchase Order'],['receipt','📦 รับสินค้า'],['return','🔄 คืนสินค้า'],['journal','📒 บันทึกบัญชี']].map(([k,v],i,arr) => (
             <div key={k} className="flex items-center gap-2 flex-shrink-0">
               <button onClick={() => setActiveTab(k)} className={`px-4 py-3 rounded-xl text-sm font-semibold transition-all ${activeTab===k ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:bg-gray-50'}`}>{v}</button>
               {i < arr.length-1 && <span className="text-gray-300">→</span>}
@@ -39,7 +39,8 @@ export default function PurchasePage() {
         <div className="bg-white rounded-2xl border border-gray-100 p-6">
           {activeTab==='po' && <POTab companyId={companyId} company={company} onReceive={() => setActiveTab('receipt')} />}
           {activeTab==='receipt' && <ReceiptTab companyId={companyId} company={company} />}
-          {activeTab==='journal' && <JournalTab companyId={companyId} />}
+          {activeTab==='journal' {activeTab==='journal' && <JournalTab companyId={companyId} />}{activeTab==='journal' && <JournalTab companyId={companyId} />} <JournalTab companyId={companyId} />}
+          {activeTab==='return' {activeTab==='journal' && <JournalTab companyId={companyId} />}{activeTab==='journal' && <JournalTab companyId={companyId} />} <ReturnTab companyId={companyId} company={company} />}
         </div>
       </div>
     </div>
@@ -552,6 +553,263 @@ function JournalTab({ companyId }) {
                   </tr>
                 </tfoot>
               </table>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ReturnTab({ companyId, company }) {
+  const [returns, setReturns] = useState([])
+  const [receipts, setReceipts] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [dateFrom, setDateFrom] = useState(firstDay)
+  const [dateTo, setDateTo] = useState(today)
+  const [showForm, setShowForm] = useState(false)
+  const [selectedGR, setSelectedGR] = useState(null)
+  const [returnItems, setReturnItems] = useState([])
+  const [reason, setReason] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => { loadReturns(); loadReceipts() }, [companyId, dateFrom, dateTo])
+
+  const loadReturns = async () => {
+    setLoading(true)
+    const { data } = await supabase.from('purchase_returns').select('*, contacts(code,name)').eq('company_id', companyId).gte('date', dateFrom).lte('date', dateTo).order('date', { ascending: false })
+    setReturns(data || [])
+    setLoading(false)
+  }
+
+  const loadReceipts = async () => {
+    const { data } = await supabase.from('purchase_receipts').select('*, contacts(code,name)').eq('company_id', companyId).eq('status', 'received').order('date', { ascending: false })
+    setReceipts(data || [])
+  }
+
+  const selectGR = (gr) => {
+    setSelectedGR(gr)
+    const its = gr.items ? JSON.parse(gr.items) : []
+    setReturnItems(its.map(i => ({ ...i, return_qty: 0, selected: false })))
+  }
+
+  const genDocNumber = async () => {
+    const year = new Date().getFullYear()
+    const { data } = await supabase.from('purchase_returns').select('doc_number').eq('company_id', companyId).like('doc_number', `DN-${year}-%`).order('doc_number', { ascending: false }).limit(1)
+    if (data && data.length > 0) {
+      const lastNum = parseInt(data[0].doc_number.split('-')[2]) || 0
+      return `DN-${year}-${String(lastNum+1).padStart(4,'0')}`
+    }
+    return `DN-${year}-0001`
+  }
+
+  const vatEnabled = company?.vat_enabled !== false
+
+  const selectedItems = returnItems.filter(i => i.selected && Number(i.return_qty) > 0)
+  const subtotal = selectedItems.reduce((s,i) => s + Number(i.return_qty)*Number(i.price), 0)
+  const vat = vatEnabled ? subtotal * 0.07 : 0
+  const total = subtotal + vat
+
+  const saveReturn = async () => {
+    if (!selectedGR) return alert('กรุณาเลือกใบรับสินค้า')
+    if (selectedItems.length === 0) return alert('กรุณาเลือกรายการที่คืน')
+    if (!reason.trim()) return alert('กรุณาระบุเหตุผลการคืนสินค้า')
+    setSaving(true)
+
+    const docNumber = await genDocNumber()
+    const contactName = selectedGR.contacts?.name || ''
+
+    const { data: inserted, error } = await supabase.from('purchase_returns').insert([{
+      company_id: companyId, doc_number: docNumber, date: today,
+      contact_id: selectedGR.contact_id, gr_id: selectedGR.id,
+      ref_doc: selectedGR.doc_number, reason,
+      items: JSON.stringify(selectedItems),
+      amount: subtotal, vat, total, status: 'active',
+    }]).select().single()
+
+    if (!error) {
+      // คืนสต็อก
+      for (const item of selectedItems) {
+        if (!item.product_id) continue
+        const { data: prod } = await supabase.from('products').select('stock_qty, cost_price').eq('id', item.product_id).single()
+        if (!prod) continue
+        const newQty = prod.stock_qty - Number(item.return_qty)
+        await supabase.from('products').update({ stock_qty: newQty }).eq('id', item.product_id)
+        await supabase.from('stock_movements').insert({
+          company_id: companyId, product_id: item.product_id,
+          movement_type: 'out', ref_type: 'return', ref_doc: docNumber,
+          qty: -Number(item.return_qty), cost_price: prod.cost_price,
+          balance_qty: newQty, note: `คืนสินค้า ${item.description} - ${reason}`,
+        })
+      }
+
+      // Journal
+      const lines = vatEnabled ? [
+        { account_code: '2100', account_name: `เจ้าหนี้การค้า (${contactName})`, debit: total, credit: 0 },
+        { account_code: '1300', account_name: 'สินค้าคงเหลือ', debit: 0, credit: subtotal },
+        { account_code: '2200', account_name: 'ภาษีมูลค่าเพิ่มซื้อ', debit: 0, credit: vat },
+      ] : [
+        { account_code: '2100', account_name: `เจ้าหนี้การค้า (${contactName})`, debit: total, credit: 0 },
+        { account_code: '1300', account_name: 'สินค้าคงเหลือ', debit: 0, credit: total },
+      ]
+
+      await createJournalEntry({
+        companyId, refDoc: docNumber, refType: 'purchase_return', date: today,
+        description: `บันทึกคืนสินค้า ${docNumber} อ้างอิง ${selectedGR.doc_number} - ${contactName} เหตุผล: ${reason}`,
+        lines,
+      })
+
+      setSaving(false)
+      setShowForm(false)
+      setSelectedGR(null)
+      setReturnItems([])
+      setReason('')
+      await loadReturns()
+      alert('บันทึกคืนสินค้า ' + docNumber + ' เรียบร้อยแล้ว')
+    } else {
+      setSaving(false)
+      alert('เกิดข้อผิดพลาด: ' + error.message)
+    }
+  }
+
+  const handleExport = () => {
+    const rows = returns.flatMap(r => {
+      const its = r.items ? JSON.parse(r.items) : []
+      return its.map(item => ({
+        'เลขที่ DN': r.doc_number, 'วันที่': r.date,
+        'ซัพพลายเออร์': r.contacts?.name, 'อ้างอิง GR': r.ref_doc||'',
+        'เหตุผล': r.reason, 'รายการสินค้า': item.description,
+        'จำนวนคืน': item.return_qty, 'ราคา/หน่วย': item.price,
+        'รวม': Number(item.return_qty)*Number(item.price),
+        'VAT': r.vat, 'รวมทั้งสิ้น': r.total,
+      }))
+    })
+    exportExcel({ filename: `DN_${dateFrom}_${dateTo}`, sheets: [{ name: 'คืนสินค้า', data: rows }] })
+  }
+
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-4 flex-wrap gap-3">
+        <h2 className="font-bold text-gray-900">🔄 คืนสินค้า / ใบเพิ่มหนี้</h2>
+        <div className="flex gap-2">
+          <button onClick={handleExport} className="bg-green-600 text-white rounded-lg px-3 py-2 text-sm font-semibold hover:bg-green-700">📊 Excel</button>
+          <button onClick={() => setShowForm(!showForm)} className="bg-indigo-600 text-white rounded-lg px-4 py-2 text-sm font-semibold hover:bg-indigo-700">+ สร้างใบคืนสินค้า</button>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2 mb-4">
+        <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm" />
+        <span className="text-gray-400">ถึง</span>
+        <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm" />
+      </div>
+
+      {showForm && (
+        <div className="bg-gray-50 rounded-xl p-6 mb-6 border border-gray-200">
+          <h3 className="font-bold text-gray-900 mb-4">{vatEnabled ? 'สร้างใบเพิ่มหนี้ (Debit Note)' : 'สร้างใบคืนสินค้า'}</h3>
+
+          <div className="mb-4">
+            <label className="block text-sm font-semibold text-gray-700 mb-1">เลือกใบรับสินค้า (GR) *</label>
+            <select className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm bg-white"
+              value={selectedGR?.id || ''}
+              onChange={e => { const gr = receipts.find(r => r.id===e.target.value); if(gr) selectGR(gr) }}>
+              <option value="">-- เลือกใบรับสินค้า --</option>
+              {receipts.map(r => <option key={r.id} value={r.id}>{r.doc_number} — {r.contacts?.name} ({r.date})</option>)}
+            </select>
+          </div>
+
+          {selectedGR && (
+            <>
+              <div className="bg-indigo-50 rounded-lg p-3 mb-4 text-sm">
+                <div className="font-semibold text-indigo-900">{selectedGR.contacts?.name}</div>
+                <div className="text-indigo-600">อ้างอิง GR: {selectedGR.doc_number} วันที่: {selectedGR.date}</div>
+              </div>
+
+              <div className="mb-4">
+                <label className="block text-sm font-semibold text-gray-700 mb-2">เลือกรายการที่คืน *</label>
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-gray-500 border-b border-gray-200">
+                      <th className="pb-2 w-8">เลือก</th>
+                      <th className="pb-2">รายการสินค้า</th>
+                      <th className="pb-2 text-center w-24">รับมา</th>
+                      <th className="pb-2 text-center w-28">จำนวนที่คืน</th>
+                      <th className="pb-2 text-right w-32">ราคา/หน่วย</th>
+                      <th className="pb-2 text-right w-32">รวม</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {returnItems.map((item,i) => (
+                      <tr key={i} className="border-b border-gray-100">
+                        <td className="py-2"><input type="checkbox" checked={item.selected||false} onChange={e => { const n=[...returnItems]; n[i].selected=e.target.checked; if(!e.target.checked) n[i].return_qty=0; setReturnItems(n) }} /></td>
+                        <td className="py-2">
+                          <div>{item.description}</div>
+                          {item.supplier_code && <div className="text-xs text-gray-400 font-mono">{item.supplier_code}</div>}
+                          {!item.product_id && <div className="text-xs text-yellow-600">⚠️ ยังไม่ได้จับคู่สินค้าในระบบ</div>}
+                        </td>
+                        <td className="py-2 text-center text-gray-500">{item.qty} {item.unit}</td>
+                        <td className="py-2 px-2">
+                          <input type="number" min="0" max={item.qty} step="any"
+                            disabled={!item.selected}
+                            className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-sm text-center disabled:bg-gray-100"
+                            value={item.return_qty||0}
+                            onChange={e => { const n=[...returnItems]; n[i].return_qty=Math.min(e.target.value, item.qty); setReturnItems(n) }} />
+                        </td>
+                        <td className="py-2 text-right">{Number(item.price).toLocaleString('th-TH',{minimumFractionDigits:2})}</td>
+                        <td className="py-2 text-right font-medium">{(Number(item.return_qty||0)*Number(item.price)).toLocaleString('th-TH',{minimumFractionDigits:2})}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <div className="mb-4">
+                <label className="block text-sm font-semibold text-gray-700 mb-1">เหตุผลการคืนสินค้า * <span className="text-gray-400 font-normal">(ต้องระบุตามข้อกำหนดสรรพากร)</span></label>
+                <input type="text" value={reason} onChange={e => setReason(e.target.value)}
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm"
+                  placeholder="เช่น สินค้าชำรุด / ไม่ตรงสเปค / ส่งเกินจำนวน" />
+              </div>
+
+              <div className="bg-white rounded-lg border border-gray-200 p-4 mb-4">
+                {vatEnabled && <>
+                  <div className="flex justify-between text-sm text-gray-600 mb-1"><span>มูลค่าสินค้าที่คืน</span><span>฿{subtotal.toLocaleString('th-TH',{minimumFractionDigits:2})}</span></div>
+                  <div className="flex justify-between text-sm text-gray-600 mb-2"><span>ภาษีมูลค่าเพิ่ม 7%</span><span>฿{vat.toLocaleString('th-TH',{minimumFractionDigits:2})}</span></div>
+                </>}
+                <div className="flex justify-between font-bold text-gray-900 text-lg border-t border-gray-200 pt-2"><span>รวมทั้งสิ้น</span><span>฿{total.toLocaleString('th-TH',{minimumFractionDigits:2})}</span></div>
+              </div>
+            </>
+          )}
+
+          <div className="flex justify-end gap-3">
+            <button onClick={() => { setShowForm(false); setSelectedGR(null); setReturnItems([]); setReason('') }} className="text-gray-500 text-sm hover:text-gray-700">ยกเลิก</button>
+            <button onClick={saveReturn} disabled={saving||selectedItems.length===0||!reason.trim()} className="bg-indigo-600 text-white rounded-lg px-6 py-2 text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50">{saving ? 'กำลังบันทึก...' : vatEnabled ? 'ออกใบเพิ่มหนี้' : 'บันทึกคืนสินค้า'}</button>
+          </div>
+        </div>
+      )}
+
+      {loading ? <div className="text-center py-12 text-gray-400">กำลังโหลด...</div> : returns.length === 0 ? (
+        <div className="text-center py-12 text-gray-400"><div className="text-4xl mb-2">🔄</div><div>ไม่มีรายการ</div></div>
+      ) : (
+        <div className="space-y-3">
+          {returns.map(r => (
+            <div key={r.id} className="p-4 rounded-xl border border-gray-100 hover:border-indigo-100 transition-all">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-indigo-600 text-sm">{r.doc_number}</span>
+                    <span className="font-semibold text-gray-900">{r.contacts?.name}</span>
+                  </div>
+                  <div className="text-sm text-gray-400">{r.date} · อ้างอิง GR: {r.ref_doc}</div>
+                  <div className="text-xs text-gray-400 mt-1">เหตุผล: {r.reason}</div>
+                  {vatEnabled && <div className="text-xs text-gray-400">VAT: ฿{Number(r.vat).toLocaleString('th-TH',{minimumFractionDigits:2})}</div>}
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="text-right">
+                    <div className="font-bold text-gray-900 text-lg">฿{Number(r.total).toLocaleString('th-TH',{minimumFractionDigits:2})}</div>
+                    <div className="text-xs text-gray-400">{vatEnabled ? 'รวม VAT' : ''}</div>
+                  </div>
+                  <button onClick={() => window.open(`/debit-note-print?id=${r.id}`,'_blank')} className="bg-indigo-600 text-white rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-indigo-700 whitespace-nowrap">📄 พิมพ์</button>
+                </div>
+              </div>
             </div>
           ))}
         </div>
