@@ -120,15 +120,47 @@ function POTab({ companyId, company, onReceive }) {
     await loadOrders()
   }
 
+  const receiveGoods = async (order) => {
+    if (!confirm(`ยืนยันรับสินค้า ${order.doc_number}?`)) return
+    const year = new Date().getFullYear()
+    const { data } = await supabase.from('purchase_receipts').select('doc_number').eq('company_id', companyId).like('doc_number', `GR-${year}-%`).order('doc_number', { ascending: false }).limit(1)
+    let docNumber = `GR-${year}-0001`
+    if (data && data.length > 0) {
+      const lastNum = parseInt(data[0].doc_number.split('-')[2]) || 0
+      docNumber = `GR-${year}-${String(lastNum+1).padStart(4,'0')}`
+    }
+    const vatEnabled = company?.vat_enabled !== false
+    const vat = vatEnabled ? order.amount * 0.07 : 0
+    const totalAmt = order.amount + vat
+    const contactName = order.contacts?.name || ''
+    const { error } = await supabase.from('purchase_receipts').insert([{
+      company_id: companyId, doc_number: docNumber, date: today,
+      contact_id: order.contact_id, po_id: order.id, ref_doc: order.doc_number,
+      amount: totalAmt, note: order.note, status: 'received', items: order.items,
+    }])
+    if (!error) {
+      await supabase.from('purchase_orders').update({ status: 'received' }).eq('id', order.id)
+      const lines = vatEnabled ? [
+        { account_code: '1300', account_name: 'สินค้าคงเหลือ', debit: order.amount, credit: 0 },
+        { account_code: '2200', account_name: 'ภาษีมูลค่าเพิ่มซื้อ', debit: vat, credit: 0 },
+        { account_code: '2100', account_name: `เจ้าหนี้การค้า (${contactName})`, debit: 0, credit: totalAmt },
+      ] : [
+        { account_code: '1300', account_name: 'สินค้าคงเหลือ', debit: order.amount, credit: 0 },
+        { account_code: '2100', account_name: `เจ้าหนี้การค้า (${contactName})`, debit: 0, credit: order.amount },
+      ]
+      await createJournalEntry({ companyId, refDoc: docNumber, refType: 'purchase', date: today, description: `บันทึกรับสินค้า ${docNumber} อ้างอิง ${order.doc_number} - ${contactName}`, lines })
+      await loadOrders(); onReceive()
+      alert('รับสินค้า ' + docNumber + ' เรียบร้อยแล้ว')
+    } else alert('เกิดข้อผิดพลาด: ' + error.message)
+  }
+
   const handleExport = () => {
     const rows = filtered.flatMap(o => {
       const its = o.items ? JSON.parse(o.items) : []
       return its.map(item => ({
-        'เลขที่ PO': o.doc_number, 'วันที่': o.date,
-        'ซัพพลายเออร์': o.contacts?.name,
-        'รหัสสินค้าซัพพลายเออร์': item.supplier_code||'',
-        'รายการสินค้า': item.description, 'หน่วย': item.unit,
-        'จำนวน': item.qty, 'ราคา/หน่วย': item.price,
+        'เลขที่ PO': o.doc_number, 'วันที่': o.date, 'ซัพพลายเออร์': o.contacts?.name,
+        'รหัสสินค้าซัพพลายเออร์': item.supplier_code||'', 'รายการสินค้า': item.description,
+        'หน่วย': item.unit, 'จำนวน': item.qty, 'ราคา/หน่วย': item.price,
         'รวม': Number(item.qty)*Number(item.price),
         'สถานะ': o.status==='open' ? 'เปิดอยู่' : o.status==='received' ? 'รับสินค้าแล้ว' : 'ยกเลิก',
       }))
@@ -199,8 +231,8 @@ function POTab({ companyId, company, onReceive }) {
             <table className="w-full text-sm">
               <thead>
                 <tr className="text-left text-gray-500 border-b border-gray-200">
-                  <th className="pb-2 font-semibold" style={{width:'20%'}}>รหัสซัพพลายเออร์</th>
-                  <th className="pb-2 font-semibold" style={{width:'30%'}}>รายละเอียด</th>
+                  <th className="pb-2 font-semibold" style={{width:'18%'}}>รหัสซัพพลายเออร์</th>
+                  <th className="pb-2 font-semibold" style={{width:'32%'}}>รายละเอียด</th>
                   <th className="pb-2 font-semibold text-center" style={{width:'10%'}}>หน่วย</th>
                   <th className="pb-2 font-semibold text-center" style={{width:'12%'}}>จำนวน</th>
                   <th className="pb-2 font-semibold text-right" style={{width:'18%'}}>ราคา/หน่วย</th>
@@ -211,7 +243,7 @@ function POTab({ companyId, company, onReceive }) {
               <tbody>
                 {items.map((item,i) => (
                   <tr key={i} className="border-b border-gray-100 align-top">
-                    <td className="py-2 pr-2"><input className="w-full border border-gray-200 rounded-lg px-2 py-2 text-sm" placeholder="รหัสสินค้าของซัพพลายเออร์" value={item.supplier_code||''} onChange={e => updateItem(i,'supplier_code',e.target.value)} /></td>
+                    <td className="py-2 pr-2"><input className="w-full border border-gray-200 rounded-lg px-2 py-2 text-sm" placeholder="รหัสสินค้าซัพพลายเออร์" value={item.supplier_code||''} onChange={e => updateItem(i,'supplier_code',e.target.value)} /></td>
                     <td className="py-2 pr-2"><input className="w-full border border-gray-200 rounded-lg px-2 py-2 text-sm" placeholder="ชื่อสินค้า/บริการ" value={item.description} onChange={e => updateItem(i,'description',e.target.value)} /></td>
                     <td className="py-2 px-1"><input className="w-full border border-gray-200 rounded-lg px-2 py-2 text-sm text-center" placeholder="หน่วย" value={item.unit||''} onChange={e => updateItem(i,'unit',e.target.value)} /></td>
                     <td className="py-2 px-1"><input type="number" min="1" step="any" className="w-full border border-gray-200 rounded-lg px-2 py-2 text-sm text-center" value={item.qty} onChange={e => updateItem(i,'qty',e.target.value)} /></td>
@@ -258,7 +290,7 @@ function POTab({ companyId, company, onReceive }) {
                   <div className="font-bold text-gray-900">฿{o.amount?.toLocaleString('th-TH',{minimumFractionDigits:2})}</div>
                   {o.status==='open' && (
                     <div className="flex flex-col gap-1">
-                      <button onClick={() => window.open(`/purchase-print?id=${o.id}`,'_blank')} className="bg-indigo-600 text-white rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-indigo-700 whitespace-nowrap">📄 พิมพ์</button>
+                      <button onClick={() => window.open(`/purchase-print?id=${o.id}`,'_blank')} className="bg-indigo-600 text-white rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-indigo-700 whitespace-nowrap">📄 พิมพ์ PO</button>
                       <button onClick={() => receiveGoods(o)} className="bg-green-500 text-white rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-green-600 whitespace-nowrap">📦 รับสินค้า</button>
                       <button onClick={() => openEdit(o)} className="bg-indigo-100 text-indigo-700 rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-indigo-200 whitespace-nowrap">✏️ แก้ไข</button>
                       <button onClick={() => cancelOrder(o)} className="bg-red-100 text-red-600 rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-red-200 whitespace-nowrap">✕ ยกเลิก</button>
@@ -288,7 +320,7 @@ function ReceiptTab({ companyId, company }) {
   const [loading, setLoading] = useState(true)
   const [dateFrom, setDateFrom] = useState(firstDay)
   const [dateTo, setDateTo] = useState(today)
-  const [matchModal, setMatchModal] = useState(null) // { receipt, itemIndex }
+  const [matchModal, setMatchModal] = useState(null)
   const [matchProductId, setMatchProductId] = useState('')
   const [matchSaving, setMatchSaving] = useState(false)
 
@@ -314,27 +346,18 @@ function ReceiptTab({ companyId, company }) {
     const item = items[itemIndex]
     const prod = products.find(p => p.id === matchProductId)
     if (!prod) return
-
-    // อัปเดต product_id ใน items
     items[itemIndex].product_id = matchProductId
     await supabase.from('purchase_receipts').update({ items: JSON.stringify(items) }).eq('id', receipt.id)
-
-    // อัปเดตสต็อก + weighted average cost
     const newQty = prod.stock_qty + Number(item.qty)
     const newCost = ((prod.stock_qty * prod.cost_price) + (Number(item.qty) * Number(item.price))) / newQty
     await supabase.from('products').update({ stock_qty: newQty, cost_price: newCost }).eq('id', matchProductId)
-
-    // บันทึก movement
     await supabase.from('stock_movements').insert({
       company_id: companyId, product_id: matchProductId,
       movement_type: 'in', ref_type: 'purchase', ref_doc: receipt.doc_number,
       qty: Number(item.qty), cost_price: Number(item.price),
       balance_qty: newQty, note: `รับสินค้า ${item.description}`,
     })
-
-    setMatchSaving(false)
-    setMatchModal(null)
-    setMatchProductId('')
+    setMatchSaving(false); setMatchModal(null); setMatchProductId('')
     await loadReceipts()
     alert('จับคู่สินค้าเรียบร้อยแล้ว')
   }
@@ -344,13 +367,9 @@ function ReceiptTab({ companyId, company }) {
       const its = r.items ? JSON.parse(r.items) : []
       return its.map(item => ({
         'เลขที่ GR': r.doc_number, 'วันที่': r.date,
-        'ซัพพลายเออร์': r.contacts?.name,
-        'อ้างอิง PO': r.ref_doc||'',
-        'รหัสซัพพลายเออร์': item.supplier_code||'',
-        'รายการสินค้า': item.description,
-        'หน่วย': item.unit||'',
-        'จำนวน': item.qty,
-        'ราคา/หน่วย': item.price,
+        'ซัพพลายเออร์': r.contacts?.name, 'อ้างอิง PO': r.ref_doc||'',
+        'รหัสซัพพลายเออร์': item.supplier_code||'', 'รายการสินค้า': item.description,
+        'หน่วย': item.unit||'', 'จำนวน': item.qty, 'ราคา/หน่วย': item.price,
         'รวม': Number(item.qty)*Number(item.price),
         'จับคู่สินค้าแล้ว': item.product_id ? 'แล้ว' : 'ยังไม่ได้',
       }))
@@ -371,13 +390,12 @@ function ReceiptTab({ companyId, company }) {
           <button onClick={handleExport} className="bg-green-600 text-white rounded-lg px-3 py-1.5 text-sm font-semibold hover:bg-green-700">📊 Excel</button>
         </div>
       </div>
-
       {receipts.length === 0 ? (
         <div className="text-center py-12 text-gray-400"><div className="text-4xl mb-2">📦</div><div>ไม่มีรายการ</div></div>
       ) : (
         <div className="space-y-4">
           {receipts.map(r => {
-            const items = r.items ? JSON.parse(r.items) : []
+            const its = r.items ? JSON.parse(r.items) : []
             return (
               <div key={r.id} className="border border-gray-100 rounded-xl overflow-hidden">
                 <div className="bg-gray-50 px-4 py-3 flex justify-between items-center">
@@ -386,25 +404,17 @@ function ReceiptTab({ companyId, company }) {
                       <span className="font-bold text-indigo-600">{r.doc_number}</span>
                       <span className="font-semibold text-gray-900">{r.contacts?.name}</span>
                     </div>
-                    <div className="text-sm text-gray-400">{r.date} {r.ref_doc && `· อ้างอิง PO: ${r.ref_doc}`}</div>
+                    <div className="text-sm text-gray-400">{r.date}{r.ref_doc && ` · อ้างอิง PO: ${r.ref_doc}`}</div>
                   </div>
                   <div className="flex items-center gap-2">
                     <div className="font-bold text-gray-900">฿{r.amount?.toLocaleString('th-TH',{minimumFractionDigits:2})}</div>
-                    <button onClick={() => window.open(`/purchase-print?id=${r.id}`,'_blank')} className="bg-indigo-600 text-white rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-indigo-700">📄 พิมพ์</button>
+                    <button onClick={() => window.open(`/purchase-print?id=${r.id}&type=gr`,'_blank')} className="bg-indigo-600 text-white rounded-lg px-3 py-1.5 text-xs font-semibold hover:bg-indigo-700">📄 พิมพ์</button>
                   </div>
                 </div>
                 <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-gray-100 bg-white text-gray-500">
-                      <th className="px-4 py-2 text-left">รหัสซัพพลายเออร์</th>
-                      <th className="px-4 py-2 text-left">รายการ</th>
-                      <th className="px-4 py-2 text-center">จำนวน</th>
-                      <th className="px-4 py-2 text-right">ราคา/หน่วย</th>
-                      <th className="px-4 py-2 text-center">สินค้าในระบบ</th>
-                    </tr>
-                  </thead>
+                  <thead><tr className="border-b border-gray-100 bg-white text-gray-500"><th className="px-4 py-2 text-left">รหัสซัพพลายเออร์</th><th className="px-4 py-2 text-left">รายการ</th><th className="px-4 py-2 text-center">จำนวน</th><th className="px-4 py-2 text-right">ราคา/หน่วย</th><th className="px-4 py-2 text-center">สินค้าในระบบ</th></tr></thead>
                   <tbody>
-                    {items.map((item,i) => (
+                    {its.map((item,i) => (
                       <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
                         <td className="px-4 py-2 font-mono text-xs text-gray-400">{item.supplier_code||'-'}</td>
                         <td className="px-4 py-2">{item.description}</td>
@@ -414,10 +424,7 @@ function ReceiptTab({ companyId, company }) {
                           {item.product_id ? (
                             <span className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full font-medium">✓ จับคู่แล้ว</span>
                           ) : (
-                            <button onClick={() => { setMatchModal({ receipt: r, itemIndex: i }); setMatchProductId('') }}
-                              className="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full font-medium hover:bg-yellow-200">
-                              จับคู่สินค้า
-                            </button>
+                            <button onClick={() => { setMatchModal({ receipt: r, itemIndex: i }); setMatchProductId('') }} className="text-xs bg-yellow-100 text-yellow-700 px-2 py-1 rounded-full font-medium hover:bg-yellow-200">จับคู่สินค้า</button>
                           )}
                         </td>
                       </tr>
@@ -482,9 +489,8 @@ function JournalTab({ companyId }) {
     const rows = entries.flatMap(entry =>
       entry.journal_lines?.map(line => ({
         'วันที่': entry.date, 'เลขที่เอกสาร': entry.ref_doc,
-        'คำอธิบาย': entry.description,
-        'รหัสบัญชี': line.account_code, 'ชื่อบัญชี': line.account_name,
-        'เดบิต (Dr)': line.debit||'', 'เครดิต (Cr)': line.credit||'',
+        'คำอธิบาย': entry.description, 'รหัสบัญชี': line.account_code,
+        'ชื่อบัญชี': line.account_name, 'เดบิต (Dr)': line.debit||'', 'เครดิต (Cr)': line.credit||'',
       })) || []
     )
     exportExcel({ filename: `Journal_Purchase_${dateFrom}_${dateTo}`, sheets: [{ name: 'สมุดรายวันจัดซื้อ', data: rows }] })
