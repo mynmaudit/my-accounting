@@ -39,8 +39,8 @@ export default function PurchasePage() {
         <div className="bg-white rounded-2xl border border-gray-100 p-6">
           {activeTab==='po' && <POTab companyId={companyId} company={company} onReceive={() => setActiveTab('receipt')} />}
           {activeTab==='receipt' && <ReceiptTab companyId={companyId} company={company} />}
-          {activeTab==='journal' {activeTab==='journal' && <JournalTab companyId={companyId} />}{activeTab==='journal' && <JournalTab companyId={companyId} />} <JournalTab companyId={companyId} />}
-          {activeTab==='return' {activeTab==='journal' && <JournalTab companyId={companyId} />}{activeTab==='journal' && <JournalTab companyId={companyId} />} <ReturnTab companyId={companyId} company={company} />}
+          {activeTab==='journal' && <JournalTab companyId={companyId} />}
+          {activeTab==='return' && <ReturnTab companyId={companyId} company={company} />}
         </div>
       </div>
     </div>
